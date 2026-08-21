@@ -12,6 +12,14 @@ Architecture:
     └── geometry/    → Coordinate conversion utilities
 """
 
+import os
+import sys
+
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_LOCAL_SITE = os.path.join(_ROOT, ".site-packages")
+if os.path.exists(_LOCAL_SITE) and _LOCAL_SITE not in sys.path:
+    sys.path.insert(0, _LOCAL_SITE)
+
 from .ipc.client import KiCadIPCClient
 from .schematic.schematic import SchematicAPI
 

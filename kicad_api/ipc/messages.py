@@ -15,8 +15,14 @@ The protobuf generated classes are loaded from:
 import os
 import sys
 
-# Ensure local proto package path is available for compiled proto imports
-_PROTO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "proto"))
+# Ensure local proto and .site-packages paths are available
+_ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_PROTO_DIR = os.path.join(_ROOT_DIR, "proto")
+_SITE_PACKAGES_DIR = os.path.join(_ROOT_DIR, ".site-packages")
+
+if os.path.exists(_SITE_PACKAGES_DIR) and _SITE_PACKAGES_DIR not in sys.path:
+    sys.path.insert(0, _SITE_PACKAGES_DIR)
+
 if _PROTO_DIR not in sys.path:
     sys.path.insert(0, _PROTO_DIR)
 

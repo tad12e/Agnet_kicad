@@ -18,7 +18,7 @@ def default_socket_path() -> str:
     KiCad's KICAD_API_SERVER (defined in common/api/api_server.cpp) listens
     on a Nanomsg Next Gen (NNG) socket. The path depends on the platform:
 
-    - Windows:  ipc://<TEMP>\\kicad\\api.sock
+    - Windows:  ipc://C:\\Users\\hp\\AppData\\Local\\Temp\\kicad\\api.sock (or dynamic TEMP)
     - macOS:    ipc:///tmp/kicad/api.sock
     - Linux:    ipc:///tmp/kicad/api.sock  (or Flatpak variant)
 
@@ -29,7 +29,9 @@ def default_socket_path() -> str:
         return env_path
 
     if platform.system() == "Windows":
-        return f"ipc://{gettempdir()}\\kicad\\api.sock"
+        # Resolve user Local\Temp directory or fallback to gettempdir()
+        temp_dir = os.environ.get("TEMP") or os.environ.get("TMP") or gettempdir()
+        return f"ipc://{temp_dir}\\kicad\\api.sock"
     elif platform.system() == "Darwin":
         return "ipc:///tmp/kicad/api.sock"
     else:

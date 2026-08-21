@@ -31,8 +31,12 @@ try:
 except ImportError:
     pynng = None  # type: ignore[assignment]
 
-from google.protobuf.message import Message
-from google.protobuf.any_pb2 import Any
+try:
+    from google.protobuf.message import Message
+    from google.protobuf.any_pb2 import Any
+except ImportError:
+    Message = object  # type: ignore[misc,assignment]
+    Any = None  # type: ignore[assignment]
 
 from .connection import default_socket_path, generate_client_name
 from .exceptions import (
