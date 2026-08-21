@@ -1,0 +1,1 @@
+"""KiCad Common Proto Bindings."""

@@ -1,0 +1,35 @@
+/*
+ * KiCad API Protocol Buffer: Schematic Commands
+ * Source: https://gitlab.com/kicad/code/kicad/-/blob/master/api/proto/schematic/schematic_commands.proto
+ */
+
+syntax = "proto3";
+
+package kiapi.schematic.types;
+
+import "common/types/base_types.proto";
+import "common/types/enums.proto";
+import "schematic/schematic_types.proto";
+
+message GetSchematicHierarchy
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+}
+
+message SchematicHierarchyResponse
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+  repeated SheetInstance top_level_sheets = 2;
+}
+
+message GetSchematicNetlist
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+  repeated kiapi.common.types.KiCadObjectType types = 2;
+}
+
+message SchematicNetlistResponse
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+  repeated SchematicNet nets = 2;
+}

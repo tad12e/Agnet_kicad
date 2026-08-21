@@ -1,0 +1,437 @@
+/*
+ * KiCad API Protocol Buffer: Schematic Types
+ * Source: https://gitlab.com/kicad/code/kicad/-/blob/master/api/proto/schematic/schematic_types.proto
+ */
+
+syntax = "proto3";
+
+package kiapi.schematic.types;
+
+import "google/protobuf/any.proto";
+import "common/types/base_types.proto";
+
+message SchematicField
+{
+  string name = 2;
+  kiapi.common.types.Text text = 3;
+  bool visible = 4;
+  bool show_name = 5;
+  bool allow_auto_place = 6;
+  bool is_private = 7;
+}
+
+enum SchematicLineType
+{
+  SLT_UNKNOWN = 0;
+  SLT_WIRE = 1;
+  SLT_BUS = 2;
+  SLT_GRAPHIC = 3;
+}
+
+message SchematicLine
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Vector2 start = 2;
+  kiapi.common.types.Vector2 end = 3;
+  SchematicLineType type = 4;
+  kiapi.common.types.StrokeAttributes stroke = 5;
+  kiapi.common.types.LockedState locked = 6;
+}
+
+message Junction
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Vector2 position = 2;
+  kiapi.common.types.Distance diameter = 3;
+  kiapi.common.types.Color color = 4;
+  kiapi.common.types.LockedState locked = 5;
+}
+
+message NoConnectMarker
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Vector2 position = 2;
+  kiapi.common.types.Distance size = 3;
+  kiapi.common.types.LockedState locked = 4;
+}
+
+enum BusEntryType
+{
+  BET_UNKNOWN = 0;
+  BET_WIRE_TO_BUS = 1;
+  BET_BUS_TO_BUS = 2;
+}
+
+message BusEntry
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Vector2 position = 2;
+  kiapi.common.types.Vector2 size = 3;
+  kiapi.common.types.StrokeAttributes stroke = 4;
+  kiapi.common.types.LockedState locked = 5;
+  BusEntryType type = 6;
+}
+
+message SchematicText
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Text text = 2;
+  kiapi.common.types.LockedState locked = 3;
+  bool exclude_from_sim = 4;
+}
+
+message SchematicTextBox
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.TextBox textbox = 2;
+  kiapi.common.types.GraphicAttributes graphic_attributes = 3;
+  kiapi.common.types.LockedState locked = 4;
+  bool exclude_from_sim = 5;
+  kiapi.common.types.Distance margin_left = 6;
+  kiapi.common.types.Distance margin_top = 7;
+  kiapi.common.types.Distance margin_right = 8;
+  kiapi.common.types.Distance margin_bottom = 9;
+}
+
+message SchematicGraphicShape
+{
+  kiapi.common.types.GraphicShape shape = 1;
+  kiapi.common.types.KIID id = 2;
+  kiapi.common.types.LockedState locked = 3;
+}
+
+message SchematicImage
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Vector2 position = 2;
+  kiapi.common.types.Vector2 transform_origin_offset = 3;
+  kiapi.common.types.Ratio image_scale = 4;
+  bytes image_data = 5;
+  kiapi.common.types.LockedState locked = 6;
+}
+
+enum SchematicLabelShape
+{
+  SLSH_UNKNOWN = 0;
+  SLSH_INPUT = 1;
+  SLSH_OUTPUT = 2;
+  SLSH_BIDI = 3;
+  SLSH_TRISTATE = 4;
+  SLSH_PASSIVE = 5;
+  SLSH_DOT = 6;
+  SLSH_CIRCLE = 7;
+  SLSH_DIAMOND = 8;
+  SLSH_RECTANGLE = 9;
+}
+
+enum SchematicLabelSpinStyle
+{
+  SLSS_UNKNOWN = 0;
+  SLSS_LEFT = 1;
+  SLSS_UP = 2;
+  SLSS_RIGHT = 3;
+  SLSS_BOTTOM = 4;
+}
+
+message LocalLabel
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Vector2 position = 2;
+  kiapi.common.types.Text text = 3;
+  SchematicLabelSpinStyle spin_style = 4;
+  repeated SchematicField fields = 5;
+  kiapi.common.types.LockedState locked = 6;
+}
+
+message GlobalLabel
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Vector2 position = 2;
+  kiapi.common.types.Text text = 3;
+  SchematicLabelSpinStyle spin_style = 4;
+  SchematicLabelShape shape = 5;
+  repeated SchematicField fields = 6;
+  kiapi.common.types.LockedState locked = 7;
+  SchematicField intersheet_refs_field = 8;
+}
+
+message HierarchicalLabel
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Vector2 position = 2;
+  kiapi.common.types.Text text = 3;
+  SchematicLabelSpinStyle spin_style = 4;
+  SchematicLabelShape shape = 5;
+  repeated SchematicField fields = 6;
+  kiapi.common.types.LockedState locked = 7;
+}
+
+message DirectiveLabel
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Vector2 position = 2;
+  kiapi.common.types.Text text = 3;
+  SchematicLabelSpinStyle spin_style = 4;
+  SchematicLabelShape shape = 5;
+  repeated SchematicField fields = 6;
+  kiapi.common.types.LockedState locked = 7;
+  kiapi.common.types.Distance pin_length = 8;
+  kiapi.common.types.Distance symbol_size = 9;
+}
+
+message Group
+{
+  kiapi.common.types.KIID id = 1;
+  string name = 2;
+  repeated kiapi.common.types.KIID items = 3;
+  kiapi.common.types.LockedState locked = 4;
+}
+
+enum SheetSide
+{
+  SHS_UNKNOWN = 0;
+  SHS_LEFT = 1;
+  SHS_RIGHT = 2;
+  SHS_TOP = 3;
+  SHS_BOTTOM = 4;
+}
+
+message SheetPin
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Vector2 position = 2;
+  kiapi.common.types.Text text = 3;
+  SchematicLabelSpinStyle spin_style = 4;
+  SchematicLabelShape shape = 5;
+  SheetSide side = 6;
+  kiapi.common.types.LockedState locked = 7;
+}
+
+message SheetSymbol
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.Vector2 position = 2;
+  kiapi.common.types.Vector2 size = 3;
+  kiapi.common.types.StrokeAttributes border_stroke = 4;
+  kiapi.common.types.GraphicFillAttributes fill = 5;
+  kiapi.common.types.LockedState locked = 6;
+  SchematicField name_field = 7;
+  SchematicField filename_field = 8;
+  repeated SchematicField user_fields = 9;
+  repeated SheetPin pins = 10;
+  bool exclude_from_sim = 11;
+  bool exclude_from_bom = 12;
+  bool exclude_from_board = 13;
+  bool dnp = 14;
+  kiapi.common.types.SheetPath path = 15;
+  string page_number = 16;
+}
+
+enum SchematicSymbolType
+{
+  SST_UNKNOWN = 0;
+  SST_NORMAL = 1;
+  SST_GLOBAL_POWER = 2;
+  SST_LOCAL_POWER = 3;
+}
+
+enum SchematicSymbolOrientation
+{
+  SSO_UNKNOWN = 0;
+  SSO_0 = 1;
+  SSO_90 = 2;
+  SSO_180 = 3;
+  SSO_270 = 4;
+}
+
+enum SchematicPinOrientation
+{
+  SPO_UNKNOWN = 0;
+  SPO_RIGHT = 1;
+  SPO_LEFT = 2;
+  SPO_UP = 3;
+  SPO_DOWN = 4;
+}
+
+enum SchematicPinShape
+{
+  SPS_UNKNOWN = 0;
+  SPS_LINE = 1;
+  SPS_INVERTED = 2;
+  SPS_CLOCK = 3;
+  SPS_INVERTED_CLOCK = 4;
+  SPS_INPUT_LOW = 5;
+  SPS_CLOCK_LOW = 6;
+  SPS_OUTPUT_LOW = 7;
+  SPS_FALLING_EDGE_CLOCK = 8;
+  SPS_NONLOGIC = 9;
+}
+
+message SchematicPinAlternate
+{
+  string name = 1;
+  SchematicPinShape shape = 2;
+  kiapi.common.types.ElectricalPinType electrical_type = 3;
+}
+
+message SchematicPin
+{
+  kiapi.common.types.KIID id = 1;
+  string name = 2;
+  string number = 3;
+  kiapi.common.types.Vector2 position = 4;
+  kiapi.common.types.Distance length = 5;
+  SchematicPinOrientation orientation = 6;
+  kiapi.common.types.ElectricalPinType electrical_type = 7;
+  SchematicPinShape shape = 8;
+  bool visible = 9;
+  kiapi.common.types.Distance name_text_size = 10;
+  kiapi.common.types.Distance number_text_size = 11;
+  repeated SchematicPinAlternate alternates = 12;
+  optional string active_alternate = 13;
+}
+
+message SchematicSymbolUnit
+{
+  int32 unit = 1;
+}
+
+message SchematicSymbolBodyStyle
+{
+  int32 style = 1;
+}
+
+message SchematicSymbolChild
+{
+  google.protobuf.Any item = 1;
+  optional SchematicSymbolUnit unit = 2;
+  optional SchematicSymbolBodyStyle body_style = 3;
+  bool is_private = 4;
+}
+
+message SchematicSymbolAttributes
+{
+  bool exclude_from_simulation = 1;
+  bool exclude_from_bill_of_materials = 2;
+  bool exclude_from_board = 3;
+  bool exclude_from_position_files = 4;
+  bool do_not_populate = 5;
+}
+
+message SchematicSymbolVariant
+{
+  string name = 1;
+  string description = 2;
+  SchematicSymbolAttributes attributes = 3;
+  map<string, string> fields = 4;
+}
+
+message PinMapEntry
+{
+  string pin_number = 1;
+  string pad_number = 2;
+}
+
+message PinMap
+{
+  string name                  = 1;
+  repeated PinMapEntry entries = 2;
+}
+
+message AssociatedFootprint
+{
+  kiapi.common.types.LibraryIdentifier footprint = 1;
+  string map_name                                 = 2;
+}
+
+message LibSymbolPinMaps
+{
+  repeated AssociatedFootprint associated_footprints = 1;
+  repeated PinMap pin_maps                           = 2;
+}
+
+enum PinMapOverrideMode
+{
+  PMOM_UNKNOWN             = 0;
+  PMOM_USE_LIBRARY_DEFAULT = 1;
+  PMOM_USE_NAMED_MAP       = 2;
+  PMOM_FORCE_IDENTITY      = 3;
+  PMOM_DELEGATE_TO_UNIT_1  = 4;
+}
+
+message PinMapInstanceOverride
+{
+  PinMapOverrideMode mode      = 1;
+  string active_map_name       = 2;
+  repeated PinMapEntry edits   = 3;
+}
+
+message SchematicSymbol
+{
+  kiapi.common.types.LibraryIdentifier id = 1;
+  SchematicSymbolType type = 2;
+  SchematicSymbolAttributes attributes = 3;
+  SchematicField reference_field = 4;
+  SchematicField value_field = 5;
+  SchematicField footprint_field = 6;
+  SchematicField datasheet_field = 7;
+  SchematicField description_field = 8;
+  repeated SchematicSymbolChild items = 9;
+  uint32 unit_count = 10;
+  uint32 body_style_count = 11;
+  string keywords = 12;
+  repeated string footprint_filters = 13;
+  LibSymbolPinMaps pin_maps = 14;
+}
+
+message SchematicSymbolTransform
+{
+  SchematicSymbolOrientation orientation = 1;
+  bool mirror_x = 2;
+  bool mirror_y = 3;
+}
+
+message SchematicSymbolInstance
+{
+  kiapi.common.types.KIID id = 1;
+  kiapi.common.types.SheetPath path = 2;
+  kiapi.common.types.Vector2 position = 3;
+  SchematicSymbolTransform transform = 4;
+  kiapi.common.types.LockedState locked = 5;
+  SchematicSymbol definition = 6;
+  SchematicField reference_field = 7;
+  SchematicField value_field = 8;
+  SchematicField footprint_field = 9;
+  SchematicField datasheet_field = 10;
+  SchematicField description_field = 11;
+  SchematicSymbolAttributes attributes = 12;
+  SchematicSymbolUnit unit = 13;
+  optional SchematicSymbolBodyStyle body_style = 14;
+  bool show_pin_names = 15;
+  bool show_pin_numbers = 16;
+  kiapi.common.types.Distance pin_name_offset = 17;
+  repeated SchematicSymbolVariant variants = 18;
+  repeated SchematicField user_fields = 19;
+  PinMapInstanceOverride pin_map_override = 20;
+}
+
+message SheetInstance
+{
+  kiapi.common.types.SheetPath path = 1;
+  string name = 2;
+  string filename = 3;
+  string page_number = 4;
+  repeated SheetInstance children = 5;
+}
+
+message SchematicNetSheetContents
+{
+  kiapi.common.types.SheetPath path = 1;
+  repeated kiapi.common.types.KIID items = 2;
+}
+
+message SchematicNet
+{
+  string name = 1;
+  repeated SchematicNetSheetContents sheets = 2;
+}

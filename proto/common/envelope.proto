@@ -1,0 +1,53 @@
+/*
+ * KiCad API Protocol Buffer: Envelope definitions
+ * Source: https://gitlab.com/kicad/code/kicad/-/blob/master/api/proto/common/envelope.proto
+ */
+
+syntax = "proto3";
+
+package kiapi.common;
+
+import "google/protobuf/any.proto";
+
+enum ApiStatusCode
+{
+  AS_UNKNOWN        = 0;
+  AS_OK             = 1; // Request succeeded
+  AS_TIMEOUT        = 2; // Request timed out
+  AS_BAD_REQUEST    = 3; // The request had invalid parameters or otherwise was illegal
+  AS_NOT_READY      = 4; // KiCad has recently started and cannot handle API requests yet
+  AS_UNHANDLED      = 5; // The request was not handled by KiCad
+  AS_TOKEN_MISMATCH = 6; // The kicad_token in the request didn't match this KiCad's token
+  AS_BUSY           = 7; // KiCad is busy performing an operation and can't accept API commands
+  AS_UNIMPLEMENTED  = 8; // The requested API call has not yet been implemented
+}
+
+message ApiRequestHeader
+{
+  string kicad_token = 1;
+  string client_name = 2;
+}
+
+message ApiRequest
+{
+  ApiRequestHeader header = 1;
+  google.protobuf.Any message = 2;
+}
+
+message ApiResponseHeader
+{
+  string kicad_token = 1;
+}
+
+message ApiResponse
+{
+  ApiResponseHeader header = 1;
+  ApiResponseStatus status = 2;
+  google.protobuf.Any message = 3;
+}
+
+message ApiResponseStatus
+{
+  ApiStatusCode status = 1;
+  string error_message = 2;
+}

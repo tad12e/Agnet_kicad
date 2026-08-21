@@ -1,0 +1,317 @@
+/*
+ * KiCad API Protocol Buffer: Editor Commands
+ * Source: https://gitlab.com/kicad/code/kicad/-/blob/master/api/proto/common/commands/editor_commands.proto
+ */
+
+syntax = "proto3";
+
+package kiapi.common.commands;
+
+import "google/protobuf/any.proto";
+import "common/types/base_types.proto";
+import "common/types/enums.proto";
+
+message RefreshEditor
+{
+  kiapi.common.types.FrameType frame = 1;
+}
+
+message OpenLibraryItem
+{
+  kiapi.common.types.DocumentType type = 1;
+  kiapi.common.types.LibraryIdentifier identifier = 2;
+}
+
+message GetOpenDocuments
+{
+  kiapi.common.types.DocumentType type = 1;
+}
+
+message GetOpenDocumentsResponse
+{
+  repeated kiapi.common.types.DocumentSpecifier documents = 1;
+}
+
+message SaveOptions
+{
+  bool overwrite = 1;
+  bool include_project = 2;
+}
+
+message SaveCopyOfDocument
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+  string path = 2;
+  SaveOptions options = 3;
+}
+
+message RevertDocument
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+}
+
+message RunAction
+{
+  string action = 1;
+}
+
+enum RunActionStatus
+{
+  RAS_UNKNOWN        = 0;
+  RAS_OK             = 1;
+  RAS_INVALID        = 2;
+  RAS_FRAME_NOT_OPEN = 3;
+}
+
+message RunActionResponse
+{
+  RunActionStatus status = 1;
+}
+
+message BeginCommit
+{
+  kiapi.common.types.ItemHeader header = 1;
+}
+
+message BeginCommitResponse
+{
+  kiapi.common.types.KIID id = 1;
+}
+
+enum CommitAction
+{
+  CMA_UNKNOWN = 0;
+  CMA_COMMIT  = 1;
+  CMA_DROP    = 2;
+}
+
+message EndCommit
+{
+  kiapi.common.types.KIID id = 1;
+  CommitAction action = 2;
+  string message = 3;
+  kiapi.common.types.ItemHeader header = 4;
+}
+
+message EndCommitResponse
+{
+}
+
+message CreateItems
+{
+  kiapi.common.types.ItemHeader header = 1;
+  repeated google.protobuf.Any items = 2;
+  kiapi.common.types.KIID container = 3;
+}
+
+enum ItemStatusCode
+{
+  ISC_UNKNOWN      = 0;
+  ISC_OK           = 1;
+  ISC_INVALID_TYPE = 2;
+  ISC_EXISTING     = 3;
+  ISC_NONEXISTENT  = 4;
+  ISC_IMMUTABLE    = 5;
+  ISC_INVALID_DATA = 7;
+}
+
+message ItemStatus
+{
+  ItemStatusCode code = 1;
+  string error_message = 2;
+}
+
+message ItemCreationResult
+{
+  ItemStatus status = 1;
+  google.protobuf.Any item = 2;
+}
+
+message CreateItemsResponse
+{
+  kiapi.common.types.ItemHeader header = 1;
+  kiapi.common.types.ItemRequestStatus status = 2;
+  repeated ItemCreationResult created_items = 3;
+}
+
+message GetItems
+{
+  kiapi.common.types.ItemHeader header = 1;
+  repeated kiapi.common.types.KiCadObjectType types = 2;
+}
+
+message GetItemsById
+{
+  kiapi.common.types.ItemHeader header = 1;
+  repeated kiapi.common.types.KIID items = 2;
+}
+
+message GetItemsResponse
+{
+  kiapi.common.types.ItemHeader header = 1;
+  kiapi.common.types.ItemRequestStatus status = 2;
+  repeated google.protobuf.Any items = 3;
+}
+
+message UpdateItems
+{
+  kiapi.common.types.ItemHeader header = 1;
+  repeated google.protobuf.Any items = 2;
+}
+
+message ItemUpdateResult
+{
+  ItemStatus status = 1;
+  google.protobuf.Any item = 2;
+}
+
+message UpdateItemsResponse
+{
+  kiapi.common.types.ItemHeader header = 1;
+  kiapi.common.types.ItemRequestStatus status = 2;
+  repeated ItemUpdateResult updated_items = 3;
+}
+
+message DeleteItems
+{
+  kiapi.common.types.ItemHeader header = 1;
+  repeated kiapi.common.types.KIID item_ids = 2;
+}
+
+enum ItemDeletionStatus
+{
+  IDS_UNKNOWN      = 0;
+  IDS_OK           = 1;
+  IDS_NONEXISTENT  = 2;
+  IDS_IMMUTABLE    = 3;
+}
+
+message ItemDeletionResult
+{
+  kiapi.common.types.KIID id = 1;
+  ItemDeletionStatus status = 2;
+}
+
+message DeleteItemsResponse
+{
+  kiapi.common.types.ItemHeader header = 1;
+  kiapi.common.types.ItemRequestStatus status = 2;
+  repeated ItemDeletionResult deleted_items = 3;
+}
+
+enum BoundingBoxMode
+{
+  BBM_UNKNOWN = 0;
+  BBM_ITEM_ONLY = 1;
+  BBM_ITEM_AND_CHILD_TEXT = 2;
+}
+
+message GetBoundingBox
+{
+  kiapi.common.types.ItemHeader header = 1;
+  repeated kiapi.common.types.KIID items = 2;
+  BoundingBoxMode mode = 3;
+}
+
+message GetBoundingBoxResponse
+{
+  repeated kiapi.common.types.KIID items = 1;
+  repeated kiapi.common.types.Box2 boxes = 2;
+}
+
+message GetSelection
+{
+  kiapi.common.types.ItemHeader header = 1;
+  repeated kiapi.common.types.KiCadObjectType types = 2;
+}
+
+message SelectionResponse
+{
+  repeated google.protobuf.Any items = 1;
+}
+
+message AddToSelection
+{
+  kiapi.common.types.ItemHeader header = 1;
+  repeated kiapi.common.types.KIID items = 2;
+}
+
+message RemoveFromSelection
+{
+  kiapi.common.types.ItemHeader header = 1;
+  repeated kiapi.common.types.KIID items = 2;
+}
+
+message ClearSelection
+{
+  kiapi.common.types.ItemHeader header = 1;
+}
+
+message HitTest
+{
+  kiapi.common.types.ItemHeader header = 1;
+  kiapi.common.types.KIID id = 2;
+  kiapi.common.types.Vector2 position = 3;
+  int32 tolerance = 4;
+}
+
+enum HitTestResult
+{
+  HTR_UNKNOWN = 0;
+  HTR_NO_HIT  = 1;
+  HTR_HIT     = 2;
+}
+
+message HitTestResponse
+{
+  HitTestResult result = 1;
+}
+
+message GetTitleBlockInfo
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+}
+
+message SetTitleBlockInfo
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+  kiapi.common.types.TitleBlockInfo title_block = 2;
+}
+
+message GetPageSettings
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+}
+
+message SetPageSettings
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+  kiapi.common.types.PageSettings page_settings = 2;
+}
+
+message SaveDocumentToString
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+}
+
+message SavedDocumentResponse
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+  string contents = 2;
+}
+
+message SaveSelectionToString
+{
+}
+
+message SavedSelectionResponse
+{
+  repeated kiapi.common.types.KIID ids = 1;
+  string contents = 2;
+}
+
+message ParseAndCreateItemsFromString
+{
+  kiapi.common.types.DocumentSpecifier document = 1;
+  string contents = 2;
+}
