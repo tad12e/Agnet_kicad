@@ -1,0 +1,4 @@
+anthropic>=0.18.0
+pyspice
+matplotlib
+pytest

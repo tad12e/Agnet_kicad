@@ -1,0 +1,35 @@
+﻿# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.class
+
+# Pytest / testing cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments & dependencies
+.env
+.venv
+env/
+venv/
+ENV/
+
+# KiCad temp & lock files
+*.kicad_prl
+*-save.kicad_sch
+*-save.kicad_pcb
+*.kicad_sch-bak
+*.kicad_pcb-bak
+_autosave-*
+*.lck
+
+# IDE / Editor config
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated
+.DS_Store
+Thumbs.db
