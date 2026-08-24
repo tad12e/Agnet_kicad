@@ -37,6 +37,7 @@ The complete execution path for adding a component:
 
 from __future__ import annotations
 
+import os
 import uuid
 from typing import TYPE_CHECKING, Optional, Tuple
 
@@ -105,6 +106,21 @@ class ComponentManager:
         pos_y_nm = mm_to_nm(position[1])
         generated_uuid = item_id or str(uuid.uuid4())
 
+        doc_proto = self.schematic.document_proto
+
+        # Ensure symbol definition is cached in the schematic file if available
+        if doc_proto.project.path and doc_proto.board_filename:
+            sch_file = os.path.join(doc_proto.project.path, doc_proto.board_filename)
+            if os.path.exists(sch_file):
+                try:
+                    from .cache_helper import extract_symbol_definition, inject_lib_symbols_into_schematic
+                    sym_lib_path = f"C:\\Program Files\\KiCad\\10.0\\share\\kicad\\symbols\\{lib_nickname}.kicad_sym"
+                    if os.path.exists(sym_lib_path):
+                        sym_def = extract_symbol_definition(sym_lib_path, entry_name)
+                        inject_lib_symbols_into_schematic(sch_file, {lib_id: sym_def})
+                except Exception:
+                    pass
+
         # Import protobuf classes
         (SchematicSymbolInstance,) = get_schematic_type_protos()
         CreateItems, CreateItemsResponse, _, _ = get_editor_command_protos()
@@ -115,11 +131,24 @@ class ComponentManager:
         sym_proto.position.x_nm = pos_x_nm
         sym_proto.position.y_nm = pos_y_nm
 
-        # Definition reference (library ID)
+        # Copy hierarchical sheet path from the schematic
+        doc_proto = self.schematic.document_proto
+        sheet_path = self.schematic.sheet_path
+        if sheet_path is not None:
+            sym_proto.path.CopyFrom(sheet_path)
+            doc_proto.sheet_path.CopyFrom(sheet_path)
+        elif hasattr(doc_proto, "sheet_path") and doc_proto.sheet_path.path:
+            sym_proto.path.CopyFrom(doc_proto.sheet_path)
+
+        # Definition reference (library ID) and unit count
         sym_proto.definition.id.library_nickname = lib_nickname
         sym_proto.definition.id.entry_name = entry_name
+        sym_proto.definition.unit_count = 1
 
-        # Mandatory fields: Reference and Value
+        # Default orientation (SSO_0 = 1)
+        sym_proto.transform.orientation = 1
+
+        # Instance fields: Reference and Value
         sym_proto.reference_field.name = "Reference"
         sym_proto.reference_field.text.text = reference
         sym_proto.reference_field.visible = True
@@ -130,13 +159,22 @@ class ComponentManager:
 
         sym_proto.unit.unit = unit
 
+        # Definition fields
+        sym_proto.definition.reference_field.name = "Reference"
+        sym_proto.definition.reference_field.text.text = reference
+        sym_proto.definition.reference_field.visible = True
+
+        sym_proto.definition.value_field.name = "Value"
+        sym_proto.definition.value_field.text.text = value
+        sym_proto.definition.value_field.visible = True
+
         # 2. Pack into google.protobuf.Any
         any_item = Any()
         any_item.Pack(sym_proto)
 
         # 3. Build CreateItems command with document header
         cmd = CreateItems()
-        cmd.header.document.CopyFrom(self.schematic.document_proto)
+        cmd.header.document.CopyFrom(doc_proto)
         cmd.items.append(any_item)
 
         # 4. Send over IPC

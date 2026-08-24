@@ -12,6 +12,7 @@ This is the main entry point for schematic operations:
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from ..ipc.client import KiCadIPCClient
@@ -34,8 +35,14 @@ class SchematicAPI:
         self,
         client: Optional[KiCadIPCClient] = None,
         document_proto: Optional[object] = None,
+        timeout_ms: Optional[int] = None,
     ):
-        self.client = client or KiCadIPCClient()
+        if client is not None:
+            self.client = client
+            if timeout_ms is not None:
+                self.client.set_timeout(timeout_ms)
+        else:
+            self.client = KiCadIPCClient(timeout_ms=timeout_ms)
         self._document_proto = document_proto
         self.components = ComponentManager(self)
 
@@ -75,4 +82,49 @@ class SchematicAPI:
             return self._document_proto
 
         self._document_proto = resp.documents[0]
+
+        # Ensure project.name and project.path are populated if KiCad returned them blank
+        if not self._document_proto.project.name and self._document_proto.board_filename:
+            proj_name = self._document_proto.board_filename.rsplit(".", 1)[0]
+            self._document_proto.project.name = proj_name
+
+        if not self._document_proto.project.path:
+            # Check default project directory locations
+            default_ece = r"C:\Users\hp\ECE\test\Agent"
+            if os.path.exists(default_ece):
+                self._document_proto.project.path = default_ece
+
         return self._document_proto
+
+    @property
+    def sheet_path(self):
+        """Return the SheetPath for the active root sheet in this schematic.
+
+        If document_proto doesn't contain a sheet_path, queries KiCad via
+        GetSchematicHierarchy to retrieve the top-level sheet path.
+        """
+        if hasattr(self, "_sheet_path") and self._sheet_path is not None:
+            return self._sheet_path
+
+        doc = self.document_proto
+        if hasattr(doc, "sheet_path") and doc.sheet_path.path:
+            self._sheet_path = doc.sheet_path
+            return self._sheet_path
+
+        # Query hierarchy from KiCad
+        try:
+            from ..ipc.messages import get_schematic_command_protos
+            GetSchematicHierarchy, SchematicHierarchyResponse, _, _ = get_schematic_command_protos()
+            cmd = GetSchematicHierarchy()
+            cmd.document.CopyFrom(doc)
+            resp = self.client.send(cmd, SchematicHierarchyResponse)
+            if resp.top_level_sheets and resp.top_level_sheets[0].path.path:
+                self._sheet_path = resp.top_level_sheets[0].path
+                # Update document_proto with sheet_path
+                self._document_proto.sheet_path.CopyFrom(self._sheet_path)
+                return self._sheet_path
+        except Exception:
+            pass
+
+        return None
+
