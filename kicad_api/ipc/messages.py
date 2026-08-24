@@ -148,3 +148,39 @@ def get_schematic_type_protos():
             raise ImportError(
                 "KiCad protobuf bindings not found. Run protoc compilation or install kipy."
             ) from e
+
+
+def get_schematic_command_protos():
+    """Import and return schematic command protobuf classes."""
+    try:
+        from schematic.schematic_commands_pb2 import (
+            GetSchematicHierarchy,
+            SchematicHierarchyResponse,
+            GetSchematicNetlist,
+            SchematicNetlistResponse,
+        )
+        return (
+            GetSchematicHierarchy,
+            SchematicHierarchyResponse,
+            GetSchematicNetlist,
+            SchematicNetlistResponse,
+        )
+    except ImportError:
+        try:
+            from kipy.proto.schematic.schematic_commands_pb2 import (
+                GetSchematicHierarchy,
+                SchematicHierarchyResponse,
+                GetSchematicNetlist,
+                SchematicNetlistResponse,
+            )
+            return (
+                GetSchematicHierarchy,
+                SchematicHierarchyResponse,
+                GetSchematicNetlist,
+                SchematicNetlistResponse,
+            )
+        except ImportError as e:
+            raise ImportError(
+                "KiCad protobuf bindings not found. Run protoc compilation or install kipy."
+            ) from e
+
