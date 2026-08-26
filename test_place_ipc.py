@@ -27,19 +27,7 @@ def main():
         return
 
     doc = resp_doc.documents[0]
-    # Set the matching project name and path
-    doc.project.name = "Agent"
-    doc.project.path = r"C:\Users\hp\ECE\test\Agent"
-
-    # Set root sheet path UUID from Agent.kicad_sch
-    root_sheet_uuid = "2fb8f65d-99c3-4933-ad30-63700ce7c984"
-    doc.sheet_path.Clear()
-    kiid_elem = doc.sheet_path.path.add()
-    kiid_elem.value = root_sheet_uuid
-
-    print(f"✓ Document Specifier Configured:")
-    print(f"  project: '{doc.project.name}' @ '{doc.project.path}'")
-    print(f"  sheet_path: {[k.value for k in doc.sheet_path.path]}")
+    print(f"✓ Using Document: {doc.board_filename}")
 
     # 2. Build Symbol R1
     print("Step 3: Building Symbol R1 (10k) message...")
@@ -51,10 +39,11 @@ def main():
     sym_proto.position.x_nm = int(100.0 * 1_000_000)  # 100mm
     sym_proto.position.y_nm = int(100.0 * 1_000_000)  # 100mm
 
-    # Set matching sheet path
-    sym_proto.path.path.add().value = root_sheet_uuid
+    # Set matching sheet path if available
+    if doc.HasField("sheet_path") and doc.sheet_path.path:
+        sym_proto.path.CopyFrom(doc.sheet_path)
 
-    # Reference library ID (matches the cached lib_symbols Device:R)
+    # Reference library ID
     sym_proto.definition.id.library_nickname = "Device"
     sym_proto.definition.id.entry_name = "R"
     sym_proto.definition.unit_count = 1
@@ -64,10 +53,14 @@ def main():
     # Instance Fields
     sym_proto.reference_field.name = "Reference"
     sym_proto.reference_field.text.text = "R1"
+    sym_proto.reference_field.text.position.x_nm = sym_proto.position.x_nm
+    sym_proto.reference_field.text.position.y_nm = sym_proto.position.y_nm - 2_540_000
     sym_proto.reference_field.visible = True
 
     sym_proto.value_field.name = "Value"
     sym_proto.value_field.text.text = "10k"
+    sym_proto.value_field.text.position.x_nm = sym_proto.position.x_nm
+    sym_proto.value_field.text.position.y_nm = sym_proto.position.y_nm + 2_540_000
     sym_proto.value_field.visible = True
 
     # Pack into Any
