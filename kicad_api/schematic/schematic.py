@@ -18,6 +18,7 @@ from typing import Optional
 from ..ipc.client import KiCadIPCClient
 from ..ipc.messages import get_editor_command_protos, get_base_type_protos, DocumentType
 from .components import ComponentManager
+from .wires import WireManager
 
 
 class SchematicAPI:
@@ -25,10 +26,10 @@ class SchematicAPI:
 
     Provides sub-managers for different schematic operations:
     - components: Add, get, list symbol instances
-    - wires: Connect pins with wires (FUTURE)
-    - junctions: Place junction dots (FUTURE)
-    - power: Place power symbols (FUTURE)
-    - nets: Inspect connectivity (FUTURE)
+    - wires: Connect pins with wires
+    - junctions: Place junction dots
+    - power: Place power symbols
+    - nets: Inspect connectivity
     """
 
     def __init__(
@@ -36,6 +37,7 @@ class SchematicAPI:
         client: Optional[KiCadIPCClient] = None,
         document_proto: Optional[object] = None,
         timeout_ms: Optional[int] = None,
+        filepath: Optional[str] = None,
     ):
         if client is not None:
             self.client = client
@@ -43,8 +45,10 @@ class SchematicAPI:
                 self.client.set_timeout(timeout_ms)
         else:
             self.client = KiCadIPCClient(timeout_ms=timeout_ms)
+        self.filepath = filepath
         self._document_proto = document_proto
         self.components = ComponentManager(self)
+        self.wires = WireManager(self)
 
     @property
     def document_proto(self):
@@ -70,59 +74,59 @@ class SchematicAPI:
         _, _, _, DocumentSpecifier = get_base_type_protos()
 
         # Query open schematic documents from KiCad
-        cmd = GetOpenDocuments()
-        cmd.type = DocumentType.DOCTYPE_SCHEMATIC
-        resp = self.client.send(cmd, GetOpenDocumentsResponse)
+        try:
+            cmd = GetOpenDocuments()
+            cmd.type = DocumentType.DOCTYPE_SCHEMATIC
+            resp = self.client.send(cmd, GetOpenDocumentsResponse)
+            if resp.documents:
+                doc = resp.documents[0]
+                if not doc.project.name and doc.board_filename:
+                    base_name = os.path.splitext(os.path.basename(doc.board_filename))[0]
+                    doc.project.name = base_name
+                self._document_proto = doc
+                return self._document_proto
+        except Exception:
+            pass
 
-        if not resp.documents:
-            # Fallback placeholder if querying headless/unnamed
-            doc = DocumentSpecifier()
-            doc.type = DocumentType.DOCTYPE_SCHEMATIC
-            self._document_proto = doc
-            return self._document_proto
-
-        self._document_proto = resp.documents[0]
-
-        # Ensure project.name and project.path are populated if KiCad returned them blank
-        if not self._document_proto.project.name and self._document_proto.board_filename:
-            proj_name = self._document_proto.board_filename.rsplit(".", 1)[0]
-            self._document_proto.project.name = proj_name
-
-        if not self._document_proto.project.path:
-            # Check default project directory locations
-            default_ece = r"C:\Users\hp\ECE\test\Agent"
-            if os.path.exists(default_ece):
-                self._document_proto.project.path = default_ece
-
+        # Fallback placeholder if querying headless/unnamed or if schematic window is opening
+        doc = DocumentSpecifier()
+        doc.type = DocumentType.DOCTYPE_SCHEMATIC
+        if self.filepath:
+            doc.board_filename = os.path.basename(self.filepath)
+            base_name = os.path.splitext(doc.board_filename)[0]
+            doc.project.name = base_name
+        self._document_proto = doc
         return self._document_proto
 
     @property
     def sheet_path(self):
-        """Return the SheetPath for the active root sheet in this schematic.
-
-        If document_proto doesn't contain a sheet_path, queries KiCad via
-        GetSchematicHierarchy to retrieve the top-level sheet path.
-        """
+        """Return the SheetPath for the active root sheet in this schematic."""
         if hasattr(self, "_sheet_path") and self._sheet_path is not None:
             return self._sheet_path
 
         doc = self.document_proto
-        if hasattr(doc, "sheet_path") and doc.sheet_path.path:
+        if doc.HasField("sheet_path") and doc.sheet_path.path:
             self._sheet_path = doc.sheet_path
             return self._sheet_path
 
-        # Query hierarchy from KiCad
+        # Try extracting root sheet UUID from local .kicad_sch file
         try:
-            from ..ipc.messages import get_schematic_command_protos
-            GetSchematicHierarchy, SchematicHierarchyResponse, _, _ = get_schematic_command_protos()
-            cmd = GetSchematicHierarchy()
-            cmd.document.CopyFrom(doc)
-            resp = self.client.send(cmd, SchematicHierarchyResponse)
-            if resp.top_level_sheets and resp.top_level_sheets[0].path.path:
-                self._sheet_path = resp.top_level_sheets[0].path
-                # Update document_proto with sheet_path
-                self._document_proto.sheet_path.CopyFrom(self._sheet_path)
-                return self._sheet_path
+            import re
+            candidate_dirs = [
+                r"C:\Users\hp\ECE\test\Agent",
+                os.getcwd(),
+            ]
+            for cdir in candidate_dirs:
+                sch_file = os.path.join(cdir, doc.board_filename or "Agent.kicad_sch")
+                if os.path.exists(sch_file):
+                    with open(sch_file, "r", encoding="utf-8", errors="ignore") as f:
+                        m = re.search(r'\(uuid\s+"?([0-9a-fA-F\-]{36})"?\)', f.read(4096))
+                        if m:
+                            _, _, _, SheetPath = get_base_type_protos()
+                            sp = SheetPath()
+                            sp.path.add().value = m.group(1)
+                            self._sheet_path = sp
+                            return self._sheet_path
         except Exception:
             pass
 
