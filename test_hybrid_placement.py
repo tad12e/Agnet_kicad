@@ -11,10 +11,10 @@ def main():
     print("Step 1: Connecting to KiCad IPC...")
     client = KiCadIPCClient()
     client.connect()
-    print("✓ Connected to KiCad socket!")
+    print("[OK] Connected to KiCad socket!")
 
     sch = SchematicAPI(client=client)
-    print(f"✓ Active Document: {sch.document_proto.board_filename}")
+    print(f"[OK] Active Document: {sch.document_proto.board_filename}")
     print(f"  Project: '{sch.document_proto.project.name}' @ '{sch.document_proto.project.path}'")
 
     print("Step 2: Placing R3 (4.7k) via sch.components.add()...")
@@ -25,9 +25,9 @@ def main():
             value="4.7k",
             position=(160.0, 100.0),
         )
-        print(f"✓ SUCCESS! Placed {comp.reference} ({comp.value}) with KIID: {comp.id}")
+        print(f"[SUCCESS] Placed {comp.reference} ({comp.value}) with KIID: {comp.id}")
     except Exception as e:
-        print(f"⚠ Result: {type(e).__name__}: {e}")
+        print(f"[ERROR] {type(e).__name__}: {e}")
 
 if __name__ == "__main__":
     main()
