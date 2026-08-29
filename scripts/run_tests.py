@@ -63,13 +63,18 @@ def run_all_tests():
         ]),
         ("tests.unit.verification.test_verifiers", [
             "test_placement_verifier",
+            "test_placement_collision_detection",
             "test_drc_verifier",
             "test_connectivity_verifier",
+            "test_geometry_verifier",
         ]),
         ("tests.unit.agent.test_agent", [
             "test_planner_request_generation",
+            "test_planner_multi_component_creation",
             "test_error_analyzer",
             "test_repair_engine",
+            "test_action_validator_preconditions",
+            "test_tool_registry",
             "test_agent_orchestrator_run",
         ]),
         ("tests.integration.test_agent_integration", [
@@ -77,6 +82,7 @@ def run_all_tests():
         ]),
         ("tests.integration.test_pcb_integration", [
             "test_pcb_board_end_to_end",
+            "test_pcb_natural_language_pipeline",
         ]),
         ("tests.integration.test_schematic_integration", [
             "test_schematic_end_to_end",
@@ -102,6 +108,7 @@ def run_all_tests():
             continue
 
         for func_name in test_funcs:
+            mock_pcbnew.ResetBoard()
             func = getattr(mod, func_name, None)
             if not func:
                 print(f"  [FAIL] Function {func_name} not found in {mod_name}")

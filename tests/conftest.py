@@ -19,6 +19,14 @@ from tests import mock_pcbnew
 sys.modules["pcbnew"] = mock_pcbnew
 
 
+@pytest.fixture(autouse=True)
+def reset_mock_board():
+    """Reset mock_pcbnew board instance before each test."""
+    mock_pcbnew.ResetBoard()
+    yield
+    mock_pcbnew.ResetBoard()
+
+
 @pytest.fixture
 def sample_pcb_file():
     """Return path to sample fixture PCB file."""

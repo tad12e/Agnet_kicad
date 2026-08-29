@@ -1,6 +1,9 @@
-"""Integration test for PCB subsystem."""
+"""Integration test for PCB subsystem and AI Agent pipeline."""
 
 import os
+from tests import mock_pcbnew
+from kicad_agent.agent.agent import KiCadAgent
+from kicad_agent.backends.pcbnew import PcbnewBackend
 from kicad_agent.pcb.board import Board
 
 
@@ -31,3 +34,18 @@ def test_pcb_board_end_to_end(tmp_path):
         drill_mm=0.4,
     )
     assert via.drill_mm == 0.4
+
+
+def test_pcb_natural_language_pipeline():
+    mock_pcbnew.ResetBoard()
+    backend = PcbnewBackend()
+    backend._pcbnew = mock_pcbnew
+    backend._board = mock_pcbnew.GetBoard()
+
+    agent = KiCadAgent(backend=backend)
+    
+    # Run multi-component creation
+    result = agent.run("Create a PCB with an Arduino Leonardo, LED, and resistor")
+    assert result["success"]
+    assert len(result["results"]) >= 3
+    assert result["transaction_state"] == "committed"

@@ -19,6 +19,26 @@ def test_placement_verifier():
     assert v_res.passed
 
 
+def test_placement_collision_detection():
+    verifier = PlacementVerifier()
+    act = Action(
+        action_type=ActionType.ADD_FOOTPRINT,
+        parameters={"reference": "R1", "x": 100.0, "y": 100.0},
+    )
+    res = ActionResult(action_id=act.action_id, success=True)
+    
+    # State with colliding component at same coordinate
+    colliding_state = {
+        "components": [
+            {"ref": "R1", "x": 100.0, "y": 100.0},
+            {"ref": "U1", "x": 100.2, "y": 100.1},
+        ]
+    }
+    v_res = verifier.verify(act, res, expected={"state": colliding_state})
+    assert not v_res.passed
+    assert "collision" in v_res.message.lower()
+
+
 def test_drc_verifier():
     verifier = DRCVerifier()
     act = Action(action_type=ActionType.RUN_DRC)
@@ -34,3 +54,14 @@ def test_connectivity_verifier():
     act = Action(action_type=ActionType.VERIFY_CONNECTIVITY)
     res = ActionResult(action_id=act.action_id, success=True, data={"unconnected_pads": 0})
     assert verifier.verify(act, res).passed
+
+
+def test_geometry_verifier():
+    verifier = GeometryVerifier()
+    act = Action(action_type=ActionType.ADD_TRACK, parameters={"start": (0, 0), "end": (10, 10), "width_mm": 0.25})
+    res = ActionResult(action_id=act.action_id, success=True)
+    assert verifier.verify(act, res).passed
+
+    # Invalid track width
+    bad_track = Action(action_type=ActionType.ADD_TRACK, parameters={"start": (0, 0), "end": (10, 10), "width_mm": 0.01})
+    assert not verifier.verify(bad_track, res).passed

@@ -29,6 +29,8 @@ class MockFootprint:
     def SetPosition(self, vec):
         self._x = vec.x
         self._y = vec.y
+    def SetOrientationDegrees(self, rot): self._rot = float(rot)
+    def GetOrientationDegrees(self): return getattr(self, "_rot", 0.0)
     def GetX(self): return self._x
     def GetY(self): return self._y
     def GetLayerName(self): return self._layer

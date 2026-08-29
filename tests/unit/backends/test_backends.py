@@ -13,6 +13,7 @@ def test_pcbnew_backend_offline():
     backend._pcbnew = mock_pcbnew
     backend._board = mock_pcbnew.GetBoard()
 
+    # Add footprint
     act = Action(
         action_type=ActionType.ADD_FOOTPRINT,
         parameters={"reference": "R10", "x": 100.0, "y": 100.0, "value": "10k"},
@@ -21,9 +22,42 @@ def test_pcbnew_backend_offline():
     assert res.success
     assert res.data["reference"] == "R10"
 
+    # Move footprint
+    act_move = Action(
+        action_type=ActionType.MOVE_FOOTPRINT,
+        parameters={"reference": "R10", "x": 120.0, "y": 130.0},
+    )
+    res_move = backend.execute(act_move)
+    assert res_move.success
+
+    # Rotate footprint
+    act_rot = Action(
+        action_type=ActionType.ROTATE_FOOTPRINT,
+        parameters={"reference": "R10", "angle": 90.0},
+    )
+    res_rot = backend.execute(act_rot)
+    assert res_rot.success
+
+    # Create board outline
+    act_outline = Action(
+        action_type=ActionType.CREATE_BOARD_OUTLINE,
+        parameters={"width": 80.0, "height": 50.0},
+    )
+    res_outline = backend.execute(act_outline)
+    assert res_outline.success
+
+    # Run DRC
     act_drc = Action(action_type=ActionType.RUN_DRC)
     res_drc = backend.execute(act_drc)
     assert res_drc.success
+
+    # Remove footprint
+    act_del = Action(
+        action_type=ActionType.REMOVE_FOOTPRINT,
+        parameters={"reference": "R10"},
+    )
+    res_del = backend.execute(act_del)
+    assert res_del.success
 
 
 def test_sexpr_backend_offline(tmp_path):
