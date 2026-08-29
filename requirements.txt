@@ -1,4 +1,7 @@
 anthropic>=0.18.0
+pynng>=0.7.0
+protobuf>=4.21.0
+pydantic>=2.0.0
+pytest>=7.0.0
 pyspice
 matplotlib
-pytest

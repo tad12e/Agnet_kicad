@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kicad-agent"
+version = "0.2.0"
+description = "AI Agent & Automation Platform for KiCad Schematic and PCBNew"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    { name = "KiCad AI Agent Team" }
+]
+dependencies = [
+    "anthropic>=0.18.0",
+    "pynng>=0.7.0",
+    "protobuf>=4.21.0",
+    "pydantic>=2.0.0",
+    "typing_extensions>=4.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+]
+sim = [
+    "pyspice",
+    "matplotlib",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit", "tests/integration"]
+norecursedirs = [".site-packages", ".git", "_legacy", "build", "dist", "proto", ".tmp_pytest"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-p no:anyio -p no:cacheprovider --basetemp=./.tmp_pytest"
