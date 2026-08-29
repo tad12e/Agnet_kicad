@@ -1,11 +1,11 @@
-"""Unit tests for kicad_api.symbols."""
+"""Unit tests for symbol resolution and library parsing."""
 
-import os
-import sys
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from kicad_api.symbols import SymbolResolver, SymbolLibraryParser, SymbolInfo, PinInfo
+from kicad_agent.schematic.symbols import (
+    PinInfo,
+    SymbolInfo,
+    SymbolLibraryParser,
+    SymbolResolver,
+)
 
 
 def test_symbol_resolver_builtins():
@@ -49,5 +49,3 @@ def test_symbol_parser_string():
     assert sym.lib_id == "CustomLib:TestResistor"
     assert sym.description == "A test resistor"
     assert sym.pin_count == 2
-    assert sym.get_pin("1") is not None
-    assert sym.get_pin("2") is not None

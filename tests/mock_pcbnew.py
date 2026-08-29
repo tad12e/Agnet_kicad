@@ -88,13 +88,25 @@ class MockBoard:
         elif isinstance(item, MockTrack):
             self.tracks.append(item)
 
+    def reset(self):
+        self.footprints = []
+        self.tracks = []
+
 _BOARD_INSTANCE = MockBoard()
 
 def GetBoard():
     return _BOARD_INSTANCE
 
+def ResetBoard():
+    global _BOARD_INSTANCE
+    _BOARD_INSTANCE = MockBoard()
+    return _BOARD_INSTANCE
+
 def FootprintLoad(lib_path, fp_name):
     return MockFootprint(ref="REF", val="VAL")
+
+def BOARD():
+    return MockBoard()
 
 def Refresh():
     pass
