@@ -2,13 +2,6 @@
 
 Low-level IPC transport layer for communicating with KiCad's API server
 over NNG (Nanomsg Next Gen) sockets using Protocol Buffers.
-
-This module handles:
-- Socket connection management
-- Protobuf envelope serialization (ApiRequest/ApiResponse)
-- Error handling and timeout management
-- Status code checking
-- Automatic retry with backoff for transient AS_NOT_READY states
 """
 
 from __future__ import annotations
@@ -24,10 +17,8 @@ except ImportError:
 
 try:
     from google.protobuf.message import Message
-    from google.protobuf.any_pb2 import Any
 except ImportError:
     Message = object  # type: ignore[misc,assignment]
-    Any = None  # type: ignore[assignment]
 
 from .connection import default_socket_path, generate_client_name
 from .exceptions import (
@@ -36,7 +27,7 @@ from .exceptions import (
     IPCRequestError,
     IPCUnpackError,
 )
-from .messages import ApiStatusCode
+from .messages import ApiStatusCode, get_envelope_protos
 
 R = TypeVar("R", bound=Message)
 
@@ -45,12 +36,6 @@ class KiCadIPCClient:
     """Low-level IPC client for KiCad's API server.
 
     Wraps the NNG Req0 socket and protobuf envelope serialization.
-
-    Usage:
-        client = KiCadIPCClient()
-        client.connect()
-        response = client.send(some_protobuf_command, ExpectedResponseType)
-        client.close()
     """
 
     def __init__(
@@ -81,13 +66,7 @@ class KiCadIPCClient:
             self._conn.recv_timeout = timeout_ms
 
     def connect(self) -> None:
-        """Establish the NNG Req0 socket connection to KiCad.
-
-        C++ context:
-            On the KiCad side, KICAD_API_SERVER::Start() (api_server.cpp)
-            creates an nng_listener on the same socket path. Our Req0 socket
-            dials that address. The NNG protocol handles the handshake.
-        """
+        """Establish the NNG Req0 socket connection to KiCad."""
         if pynng is None:
             raise IPCConnectionError(
                 "pynng package is required for KiCad IPC communication. "
@@ -109,8 +88,7 @@ class KiCadIPCClient:
             self._connected = False
             raise IPCConnectionError(
                 f"Failed to connect to KiCad IPC server at {self.socket_path}. "
-                f"Make sure KiCad is running with the API server enabled "
-                f"(Preferences → Plugins). Error: {e}"
+                f"Make sure KiCad is running with the API server enabled. Error: {e}"
             ) from e
 
     def close(self) -> None:
@@ -124,31 +102,12 @@ class KiCadIPCClient:
         return self._connected
 
     def send(self, command: Message, response_type: Type[R]) -> R:
-        """Serialize a protobuf command, send to KiCad, return typed response.
-
-        Handles transient AS_NOT_READY states with exponential backoff retry.
-
-        Args:
-            command: Any protobuf command message (e.g., CreateItems).
-            response_type: The expected response protobuf class.
-
-        Returns:
-            Deserialized response of type R.
-
-        Raises:
-            IPCConnectionError: If not connected or send/recv fails.
-            IPCTimeoutError: If KiCad doesn't reply within timeout.
-            IPCRequestError: If KiCad returns an error status.
-            IPCUnpackError: If the response can't be unpacked.
-        """
+        """Serialize a protobuf command, send to KiCad, and return typed response."""
         if not self._connected:
             self.connect()
 
-        # Import envelope protos
-        from .messages import get_envelope_protos
         ApiRequest, ApiResponse = get_envelope_protos()
 
-        # Build the envelope
         envelope = ApiRequest()
         envelope.header.kicad_token = self.kicad_token
         envelope.header.client_name = self.client_name
@@ -173,8 +132,7 @@ class KiCadIPCClient:
                 reply_bytes = self._conn.recv()
             except pynng.exceptions.Timeout as e:
                 raise IPCTimeoutError(
-                    f"Timed out waiting for KiCad response after {self.timeout_ms}ms: {e}. "
-                    f"Ensure KiCad and Eeschema are open and not blocked by any modal dialogs."
+                    f"Timed out waiting for KiCad response after {self.timeout_ms}ms: {e}."
                 ) from e
             except Exception as e:
                 self._connected = False
@@ -182,7 +140,6 @@ class KiCadIPCClient:
                     f"Failed to receive response from KiCad: {e}"
                 ) from e
 
-            # Parse envelope
             reply = ApiResponse()
             reply.ParseFromString(reply_bytes)
 
@@ -196,14 +153,12 @@ class KiCadIPCClient:
                     raise IPCRequestError(
                         status_code=reply.status.status,
                         error_message=(
-                            f"KiCad is not ready to reply (attempted {self.max_not_ready_retries + 1} times). "
-                            f"Ensure the Schematic/PCB editor window is fully open and active."
+                            f"KiCad is not ready to reply (attempted {self.max_not_ready_retries + 1} times)."
                         ),
                     )
 
-            # Check status — handle AS_TOKEN_MISMATCH (status 6)
+            # Check status — handle AS_TOKEN_MISMATCH
             if reply.status.status == ApiStatusCode.AS_TOKEN_MISMATCH:
-                # Update with new token if KiCad provided one, or clear it
                 self.kicad_token = reply.header.kicad_token if reply.header.kicad_token else ""
                 envelope.header.kicad_token = self.kicad_token
                 payload = envelope.SerializeToString()
@@ -221,16 +176,13 @@ class KiCadIPCClient:
                     error_message=reply.status.error_message,
                 )
 
-            # Capture token from successful response if present
             if reply.header.kicad_token:
                 self.kicad_token = reply.header.kicad_token
 
-            # Unpack inner message
             response = response_type()
             if not reply.message.Unpack(response):
                 raise IPCUnpackError(
-                    f"Failed to unpack response of type {response_type.__name__} "
-                    f"from KiCad reply."
+                    f"Failed to unpack response of type {response_type.__name__} from KiCad reply."
                 )
 
             return response

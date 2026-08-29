@@ -1,24 +1,18 @@
 """KiCad IPC Exception Types.
 
 Domain-specific exceptions for the IPC transport layer.
-These replace generic Python exceptions with meaningful error types
-that callers can catch and handle appropriately.
 """
+
+from __future__ import annotations
 
 
 class IPCError(Exception):
-    """Base exception for all KiCad IPC errors."""
+    """Base exception for all KiCad IPC transport errors."""
     pass
 
 
 class IPCConnectionError(IPCError):
-    """Failed to connect to KiCad's IPC server.
-
-    Common causes:
-    - KiCad is not running
-    - The API server is not enabled (Preferences → Plugins → Enable API)
-    - Wrong socket path
-    """
+    """Failed to connect to KiCad's IPC server."""
     pass
 
 

@@ -1,35 +1,25 @@
 """KiCad IPC Protobuf Message Helpers.
 
-Centralizes protobuf imports and provides enum constants that match
-KiCad's official .proto definitions:
-
-- api/proto/common/envelope.proto         → ApiStatusCode
-- api/proto/common/types/base_types.proto → DocumentType
-- api/proto/common/commands/editor_commands.proto → ItemStatusCode
-
-The protobuf generated classes are loaded from:
-1. `proto/` (local compiled bindings from official KiCad proto files)
-2. `kipy` (if installed)
+Centralizes protobuf imports and provides enum constants matching
+KiCad's official .proto definitions.
 """
+
+from __future__ import annotations
 
 import os
 import sys
 
-# Ensure local proto and .site-packages paths are available
-_ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# Ensure local proto and .site-packages paths are accessible
+_ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _PROTO_DIR = os.path.join(_ROOT_DIR, "proto")
 _SITE_PACKAGES_DIR = os.path.join(_ROOT_DIR, ".site-packages")
 
 if os.path.exists(_SITE_PACKAGES_DIR) and _SITE_PACKAGES_DIR not in sys.path:
     sys.path.insert(0, _SITE_PACKAGES_DIR)
 
-if _PROTO_DIR not in sys.path:
+if os.path.exists(_PROTO_DIR) and _PROTO_DIR not in sys.path:
     sys.path.insert(0, _PROTO_DIR)
 
-
-# ---------------------------------------------------------------------------
-# Enum constants matching KiCad's protobuf enums.
-# ---------------------------------------------------------------------------
 
 class ApiStatusCode:
     """Matches kiapi.common.ApiStatusCode in envelope.proto."""
@@ -66,10 +56,6 @@ class ItemStatusCode:
     ISC_INVALID_DATA = 7
 
 
-# ---------------------------------------------------------------------------
-# Protobuf message loader functions.
-# ---------------------------------------------------------------------------
-
 def get_envelope_protos():
     """Import and return the ApiRequest/ApiResponse envelope classes."""
     try:
@@ -81,7 +67,7 @@ def get_envelope_protos():
             return ApiRequest, ApiResponse
         except ImportError as e:
             raise ImportError(
-                "KiCad protobuf bindings not found. Run protoc compilation or install kipy."
+                "KiCad protobuf bindings not found. Ensure proto/ directory or kipy is installed."
             ) from e
 
 
@@ -106,7 +92,7 @@ def get_editor_command_protos():
             return CreateItems, CreateItemsResponse, GetOpenDocuments, GetOpenDocumentsResponse
         except ImportError as e:
             raise ImportError(
-                "KiCad protobuf bindings not found. Run protoc compilation or install kipy."
+                "KiCad protobuf bindings not found. Ensure proto/ directory or kipy is installed."
             ) from e
 
 
@@ -118,8 +104,9 @@ def get_base_type_protos():
             Vector2,
             LibraryIdentifier,
             DocumentSpecifier,
+            SheetPath,
         )
-        return KIID, Vector2, LibraryIdentifier, DocumentSpecifier
+        return KIID, Vector2, LibraryIdentifier, DocumentSpecifier, SheetPath
     except ImportError:
         try:
             from kipy.proto.common.types.base_types_pb2 import (
@@ -127,12 +114,17 @@ def get_base_type_protos():
                 Vector2,
                 LibraryIdentifier,
                 DocumentSpecifier,
+                SheetPath,
             )
-            return KIID, Vector2, LibraryIdentifier, DocumentSpecifier
-        except ImportError as e:
-            raise ImportError(
-                "KiCad protobuf bindings not found. Run protoc compilation or install kipy."
-            ) from e
+            return KIID, Vector2, LibraryIdentifier, DocumentSpecifier, SheetPath
+        except ImportError:
+            from common.types.base_types_pb2 import (
+                KIID,
+                Vector2,
+                LibraryIdentifier,
+                DocumentSpecifier,
+            )
+            return KIID, Vector2, LibraryIdentifier, DocumentSpecifier, None
 
 
 def get_schematic_type_protos():
@@ -146,7 +138,7 @@ def get_schematic_type_protos():
             return (SchematicSymbolInstance,)
         except ImportError as e:
             raise ImportError(
-                "KiCad protobuf bindings not found. Run protoc compilation or install kipy."
+                "KiCad protobuf bindings not found. Ensure proto/ directory or kipy is installed."
             ) from e
 
 
@@ -181,6 +173,5 @@ def get_schematic_command_protos():
             )
         except ImportError as e:
             raise ImportError(
-                "KiCad protobuf bindings not found. Run protoc compilation or install kipy."
+                "KiCad protobuf bindings not found. Ensure proto/ directory or kipy is installed."
             ) from e
-
