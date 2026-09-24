@@ -182,3 +182,446 @@ class IPCBackend(KiCadBackend):
 
     def disconnect(self) -> None:
         self.client.close()
+
+    def _get_document(self, doc_type: int = DocumentType.DOCTYPE_SCHEMATIC):
+        """Resolve the live open document of the requested type (Part 3).
+
+        Honest-error contract: NEVER fabricates a document. Raises
+        AgentError(CONNECTION_ERROR) when KiCad is unreachable, has no
+        document of the requested type open, or rejects the request (e.g.
+        AS_UNHANDLED when that editor frame is not open). Callers must
+        handle it: `execute()` converts it to a failed ActionResult;
+        `get_state()` lets it propagate so OBSERVE fails fast instead of
+        reasoning about a phantom empty board.
+        """
+        if self._doc_proto is not None and getattr(self._doc_proto, "type", None) == doc_type:
+            return self._doc_proto
+
+        _, _, GetOpenDocuments, GetOpenDocumentsResponse = get_editor_command_protos()
+        cmd = GetOpenDocuments()
+        cmd.type = doc_type
+        try:
+            resp = self.client.send(cmd, GetOpenDocumentsResponse)
+        except AgentError:
+            raise
+        except Exception as e:
+            if (isinstance(e, IPCRequestError)
+                    and e.status_code == ApiStatusCode.AS_UNHANDLED):
+                hint = ("No handler: open that editor frame in KiCad "
+                        "(e.g. double-click the .kicad_sch) and retry.")
+            else:
+                hint = ("Is KiCad running with the API server enabled "
+                        "(Preferences > Plugins)?")
+            raise AgentError(
+                category=ErrorCategory.CONNECTION_ERROR,
+                message=f"GetOpenDocuments failed: {e}. {hint}",
+            ) from e
+
+        for doc in resp.documents:
+            if getattr(doc, "type", None) == doc_type:
+                self._doc_proto = doc
+                return doc
+        if resp.documents:
+            # Server answered but has no document of the requested type.
+            self._doc_proto = resp.documents[0]
+            return self._doc_proto
+
+        raise AgentError(
+            category=ErrorCategory.CONNECTION_ERROR,
+            message=f"No open document of type {doc_type} in KiCad. "
+            "Open a project with that editor frame and retry.",
+        )
+
+    def begin_commit(self, doc):
+        """Open a KiCad edit commit; returns the commit id proto (Part 4)."""
+        BeginCommit, BeginCommitResponse, _, _ = get_commit_protos()
+        cmd = BeginCommit()
+        cmd.header.document.CopyFrom(doc)
+        try:
+            resp = self.client.send(cmd, BeginCommitResponse)
+        except AgentError:
+            raise
+        except Exception as e:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"BeginCommit failed: {e}",
+            ) from e
+        return resp.id
+
+    def end_commit(self, commit_id, doc, message: str, drop: bool = False) -> None:
+        """Close a commit (CMA_COMMIT) or roll it back (CMA_DROP)."""
+        _, _, EndCommit, EndCommitResponse = get_commit_protos()
+        cmd = EndCommit()
+        cmd.id.CopyFrom(commit_id)
+        cmd.action = CommitAction.CMA_DROP if drop else CommitAction.CMA_COMMIT
+        cmd.message = message
+        cmd.header.document.CopyFrom(doc)
+        try:
+            self.client.send(cmd, EndCommitResponse)
+        except AgentError:
+            raise
+        except Exception as e:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"EndCommit failed: {e}",
+            ) from e
+
+    def create_items(self, doc, packed_items: list):
+        """Send CreateItems and VERIFY every result (Part 4).
+
+        Raises AgentError unless the response-level status is IRS_OK, the
+        created count matches the sent count, and every item status is
+        ISC_OK. This kills the silent-echo "success" (server returning our
+        payload with empty ids instead of erroring).
+        Returns the raw CreateItemsResponse on success.
+        """
+        CreateItems, CreateItemsResponse, _, _ = get_editor_command_protos()
+        cmd = CreateItems()
+        cmd.header.document.CopyFrom(doc)
+        cmd.items.extend(packed_items)
+        try:
+            resp = self.client.send(cmd, CreateItemsResponse)
+        except AgentError:
+            raise
+        except Exception as e:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"CreateItems failed: {e}",
+            ) from e
+
+        if resp.status != ItemRequestStatus.IRS_OK:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"CreateItems rejected (request status {resp.status}).",
+            )
+        if len(resp.created_items) != len(packed_items):
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"CreateItems count mismatch: sent {len(packed_items)}, "
+                f"server returned {len(resp.created_items)}.",
+            )
+        failures = [
+            r.status.error_message or f"code {r.status.code}"
+            for r in resp.created_items
+            if r.status.code != ItemStatusCode.ISC_OK
+        ]
+        if failures:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"CreateItems item failures: {'; '.join(failures)}",
+            )
+        return resp
+
+    @staticmethod
+    def _created_id(resp, message_type) -> str:
+        """Unpack the first created item's id; "" when missing/unpackable."""
+        try:
+            item = message_type()
+            if resp.created_items and resp.created_items[0].item.Unpack(item):
+                return getattr(getattr(item, "id", None), "value", "") or ""
+        except Exception:
+            pass
+        return ""
+
+    def _run_commit(self, doc, message: str, fn):
+        """Run fn() inside a commit; DROP on any failure (Part 7).
+
+        10.0.4 note: schematic UpdateItems against a fresh session can hit
+        server-side instability (upstream null-deref reports). Timeouts and
+        refusals surface as IPC_ERROR/CONNECTION_ERROR and flow to the
+        fallback backend via Part 6 routing. Priming workaround if the
+        server wedges: make one manual edit + save in KiCad, then retry.
+        """
+        commit_id = self.begin_commit(doc)
+        try:
+            data = fn()
+        except Exception:
+            try:
+                self.end_commit(commit_id, doc, "drop: " + message, drop=True)
+            except Exception:
+                pass
+            raise
+        self.end_commit(commit_id, doc, message)
+        return data
+
+    def get_items_by_id(self, doc, ids: list):
+        """Fetch items by KIID strings via GetItemsById (Part 7)."""
+        (GetItemsById,) = get_item_by_id_protos()
+        _, GetItemsResponse, _, _, _, _ = get_item_mutation_protos()
+        cmd = GetItemsById()
+        cmd.header.document.CopyFrom(doc)
+        for value in ids:
+            kiid = cmd.items.add()
+            kiid.value = value
+        try:
+            resp = self.client.send(cmd, GetItemsResponse)
+        except AgentError:
+            raise
+        except Exception as e:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"GetItemsById failed: {e}",
+            ) from e
+        if resp.status != ItemRequestStatus.IRS_OK:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"GetItemsById rejected (request status {resp.status}).",
+            )
+        return list(resp.items)
+
+    def update_items(self, doc, packed_items: list):
+        """Send UpdateItems and verify every result (Part 7)."""
+        _, _, UpdateItems, UpdateItemsResponse, _, _ = get_item_mutation_protos()
+        cmd = UpdateItems()
+        cmd.header.document.CopyFrom(doc)
+        cmd.items.extend(packed_items)
+        try:
+            resp = self.client.send(cmd, UpdateItemsResponse)
+        except AgentError:
+            raise
+        except Exception as e:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"UpdateItems failed: {e}",
+            ) from e
+        if resp.status != ItemRequestStatus.IRS_OK:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"UpdateItems rejected (request status {resp.status}).",
+            )
+        if len(resp.updated_items) != len(packed_items):
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"UpdateItems count mismatch: sent {len(packed_items)}, "
+                f"server returned {len(resp.updated_items)}.",
+            )
+        failures = [
+            r.status.error_message or f"code {r.status.code}"
+            for r in resp.updated_items
+            if r.status.code != ItemStatusCode.ISC_OK
+        ]
+        if failures:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"UpdateItems item failures: {'; '.join(failures)}",
+            )
+        return resp
+
+    def delete_items_by_id(self, doc, ids: list):
+        """Send DeleteItems and verify every id reports IDS_OK (Part 7)."""
+        _, _, _, _, DeleteItems, DeleteItemsResponse = get_item_mutation_protos()
+        cmd = DeleteItems()
+        cmd.header.document.CopyFrom(doc)
+        for value in ids:
+            kiid = cmd.item_ids.add()
+            kiid.value = value
+        try:
+            resp = self.client.send(cmd, DeleteItemsResponse)
+        except AgentError:
+            raise
+        except Exception as e:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"DeleteItems failed: {e}",
+            ) from e
+        if resp.status != ItemRequestStatus.IRS_OK:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"DeleteItems rejected (request status {resp.status}).",
+            )
+        by_id = {r.id.value: r for r in resp.deleted_items}
+        failures = []
+        for value in ids:
+            result = by_id.get(value)
+            if result is None:
+                failures.append(f"{value}: no deletion record")
+            elif result.status != ItemDeletionStatus.IDS_OK:
+                failures.append(f"{value}: deletion status {result.status}")
+        if failures:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"DeleteItems failures: {'; '.join(failures)}",
+            )
+        return resp
+
+    def _resolve_symbol_id(self, doc, reference: str) -> str:
+        """Map a reference designator to a live KIID via snapshot (Part 7)."""
+        want = (reference or "").upper()
+        for sym in self.get_schematic_snapshot(doc)["symbols"]:
+            if str(sym.get("reference", "")).upper() == want:
+                return sym["id"]
+        raise AgentError(
+            category=ErrorCategory.MISSING_OBJECT,
+            message=f"Symbol '{reference}' not found in live schematic.",
+        )
+
+    # -- File operations: IPC works on LIVE open documents, never files.
+    # (Part 8 honesty: these raised nothing before and did nothing.)
+    def load_board(self, filepath: str) -> Dict[str, Any]:
+        raise AgentError(
+            category=ErrorCategory.INVALID_ACTION,
+            message="IPCBackend manages the live open PCB, not files. Use "
+            "PcbnewBackend/SexprBackend to load board files.",
+        )
+
+    def save_board(self, filepath: Optional[str] = None) -> bool:
+        raise AgentError(
+            category=ErrorCategory.INVALID_ACTION,
+            message="IPCBackend cannot save files. Use PcbnewBackend/SexprBackend.",
+        )
+
+    def load_schematic(self, filepath: str) -> Dict[str, Any]:
+        raise AgentError(
+            category=ErrorCategory.INVALID_ACTION,
+            message="IPCBackend manages the live open schematic, not files. Use "
+            "SexprBackend to load schematic files.",
+        )
+
+    def save_schematic(self, filepath: Optional[str] = None) -> bool:
+        raise AgentError(
+            category=ErrorCategory.INVALID_ACTION,
+            message="IPCBackend cannot save files. Use SexprBackend.",
+        )
+
+    def get_items(self, doc, kot_types=None):
+        """List board/schematic items via GetItems (Part 5).
+
+        kot_types must be explicit (empty filter errors on KiCad < 10.0.7).
+        Raises AgentError unless the response status is IRS_OK.
+        """
+        GetItems, GetItemsResponse, _, _, _, _ = get_item_mutation_protos()
+        cmd = GetItems()
+        cmd.header.document.CopyFrom(doc)
+        cmd.types.extend(list(kot_types) if kot_types else [])
+        try:
+            resp = self.client.send(cmd, GetItemsResponse)
+        except AgentError:
+            raise
+        except Exception as e:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"GetItems failed: {e}",
+            ) from e
+        if resp.status != ItemRequestStatus.IRS_OK:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"GetItems rejected (request status {resp.status}).",
+            )
+        return list(resp.items)
+
+    def get_schematic_snapshot(self, doc) -> Dict[str, Any]:
+        """Summarize live schematic symbols/wires/junctions/labels (Part 5)."""
+        snapshot: Dict[str, Any] = {
+            "symbols": [],
+            "wires": [],
+            "junctions": [],
+            "labels": [],
+            "unknown_items": [],
+        }
+        for any_msg in self.get_items(doc, SCHEMATIC_ITEM_TYPES):
+            kind, summary = summarize_schematic_item(any_msg)
+            if kind == "symbol":
+                snapshot["symbols"].append(summary)
+            elif kind == "wire":
+                snapshot["wires"].append(summary)
+            elif kind == "junction":
+                snapshot["junctions"].append(summary)
+            elif kind == "label":
+                snapshot["labels"].append(summary)
+            else:
+                snapshot["unknown_items"].append(summary)
+        return snapshot
+
+    def get_schematic_hierarchy(self, doc) -> list:
+        """Nested sheet tree via GetSchematicHierarchy (Part 5)."""
+        GetHier, HierResp, _, _ = get_schematic_command_protos()
+
+        def _sheet(node) -> Dict[str, Any]:
+            # page_number is a string in KiCad's schema ("1", "2-1", ...).
+            return {
+                "name": getattr(node, "name", ""),
+                "filename": getattr(node, "filename", ""),
+                "page_number": str(getattr(node, "page_number", "") or ""),
+                "children": [_sheet(c) for c in getattr(node, "children", [])],
+            }
+
+        cmd = GetHier()
+        cmd.document.CopyFrom(doc)
+        try:
+            resp = self.client.send(cmd, HierResp)
+        except AgentError:
+            raise
+        except Exception as e:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"GetSchematicHierarchy failed: {e}",
+            ) from e
+        return [_sheet(s) for s in resp.top_level_sheets]
+
+    def get_schematic_document_text(self, doc) -> str:
+        """Fetch the live schematic model as S-expression text (cascade T1).
+
+        Read-only: no commit, nothing to drop. Empty/whitespace content is
+        an explicit error, never phantom text.
+        """
+        SaveDocumentToString, SavedDocumentResponse = get_document_text_protos()
+        cmd = SaveDocumentToString()
+        cmd.document.CopyFrom(doc)
+        try:
+            resp = self.client.send(cmd, SavedDocumentResponse)
+        except AgentError:
+            raise
+        except Exception as e:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"SaveDocumentToString failed: {e}",
+            ) from e
+        contents = getattr(resp, "contents", "") or ""
+        if not contents.strip():
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message="Live schematic text came back empty.",
+            )
+        return contents
+
+    def get_schematic_netlist(self, doc) -> list:
+        """Net names via GetSchematicNetlist (Part 5)."""
+        _, _, GetNetlist, NetlistResp = get_schematic_command_protos()
+        cmd = GetNetlist()
+        cmd.document.CopyFrom(doc)
+        try:
+            resp = self.client.send(cmd, NetlistResp)
+        except AgentError:
+            raise
+        except Exception as e:
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=f"GetSchematicNetlist failed: {e}",
+            ) from e
+        return [
+            {"name": getattr(n, "name", ""), "sheets": len(getattr(n, "sheets", []))}
+            for n in resp.nets
+        ]
+
+    def get_state(self, domain: str = "pcb") -> Dict[str, Any]:
+        # Raises AgentError (via _get_document) when no live document exists.
+        doc_type = DocumentType.DOCTYPE_PCB if domain == "pcb" else DocumentType.DOCTYPE_SCHEMATIC
+        doc = self._get_document(doc_type)
+        state = {
+            "board_filename": getattr(doc, "board_filename", ""),
+            "project_name": getattr(doc.project, "name", "") if hasattr(doc, "project") else "",
+        }
+        if domain != "schematic":
+            return state
+        # Core read (required): failure raises, never phantom items.
+        state.update(self.get_schematic_snapshot(doc))
+        # Enrichment (best-effort): failures recorded explicitly per section.
+        for section, reader in (
+            ("sheets", self.get_schematic_hierarchy),
+            ("nets", self.get_schematic_netlist),
+        ):
+            try:
+                state[section] = reader(doc)
+            except AgentError as e:
+                state[section] = {"error": e.message}
+        return state
