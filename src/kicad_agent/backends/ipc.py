@@ -20,22 +20,151 @@ from ..core.actions import Action, ActionDomain, ActionType
 from ..core.errors import AgentError, ErrorCategory
 from ..core.results import ActionResult
 from ..ipc.client import KiCadIPCClient
+from ..ipc.exceptions import IPCRequestError
 from ..ipc.messages import (
+    ApiStatusCode,
+    SCHEMATIC_ITEM_TYPES,
+    CommitAction,
     DocumentType,
+    ItemDeletionStatus,
+    ItemRequestStatus,
     ItemStatusCode,
-    get_base_type_protos,
+    KiCadObjectType,
+    get_commit_protos,
+    get_document_text_protos,
     get_editor_command_protos,
+    get_item_by_id_protos,
+    get_item_mutation_protos,
     get_schematic_command_protos,
     get_schematic_type_protos,
 )
 from .base import KiCadBackend
 
 
-class IPCBackend(KiCadBackend):
-    """Live KiCad IPC protocol backend."""
+def _nm_to_mm(value) -> float:
+    try:
+        return float(value) / 1e6
+    except (TypeError, ValueError):
+        return 0.0
 
-    def __init__(self, client: Optional[KiCadIPCClient] = None, socket_path: Optional[str] = None):
+
+def _pos_mm(vec) -> tuple:
+    return (_nm_to_mm(getattr(vec, "x_nm", 0)), _nm_to_mm(getattr(vec, "y_nm", 0)))
+
+
+def _field_text(field) -> str:
+    """Extract the string from a SchematicField (field.text.text)."""
+    text = getattr(field, "text", None)
+    value = getattr(text, "text", "")
+    return str(value) if value is not None else ""
+
+
+def _schematic_type_classes():
+    """Lazily import vendored schematic message classes (Part 5)."""
+    from proto.schematic.schematic_types_pb2 import (  # type: ignore[import]
+        DirectiveLabel,
+        GlobalLabel,
+        HierarchicalLabel,
+        Junction,
+        LocalLabel,
+        SchematicLine,
+        SchematicSymbolInstance,
+    )
+
+    return {
+        "SchematicSymbolInstance": SchematicSymbolInstance,
+        "SchematicLine": SchematicLine,
+        "Junction": Junction,
+        "LocalLabel": LocalLabel,
+        "GlobalLabel": GlobalLabel,
+        "HierarchicalLabel": HierarchicalLabel,
+        "DirectiveLabel": DirectiveLabel,
+    }
+
+
+_LINE_KIND = {1: "wire", 2: "bus", 3: "graphic"}
+
+
+def summarize_schematic_item(any_msg):
+    """Unpack one GetItems Any into (kind, summary dict) (Part 5).
+
+    Returns ("unknown", {"type": type_url}) for unrecognized payloads so
+    callers count rather than fabricate.
+    """
+    classes = _schematic_type_classes()
+    type_url = any_msg.TypeName() if hasattr(any_msg, "TypeName") else ""
+    short = type_url.rsplit(".", 1)[-1].rsplit("/", 1)[-1]
+    cls = classes.get(short)
+    if cls is None:
+        return "unknown", {"type": type_url or "unrecognized"}
+    msg = cls()
+    try:
+        if not any_msg.Unpack(msg):
+            return "unknown", {"type": type_url}
+    except Exception:
+        return "unknown", {"type": type_url}
+
+    item_id = getattr(getattr(msg, "id", None), "value", "") or ""
+    if short == "SchematicSymbolInstance":
+        lib = getattr(getattr(msg, "definition", None), "id", None)
+        return "symbol", {
+            "id": item_id,
+            "reference": _field_text(getattr(msg, "reference_field", None)),
+            "value": _field_text(getattr(msg, "value_field", None)),
+            "lib_id": "%s:%s" % (
+                getattr(lib, "library_nickname", ""),
+                getattr(lib, "entry_name", ""),
+            ),
+            "x_mm": _pos_mm(getattr(msg, "position", None))[0],
+            "y_mm": _pos_mm(getattr(msg, "position", None))[1],
+        }
+    if short == "SchematicLine":
+        start = _pos_mm(getattr(msg, "start", None))
+        end = _pos_mm(getattr(msg, "end", None))
+        line_type = int(getattr(msg, "type", 0) or 0)
+        return "wire", {
+            "id": item_id,
+            "kind": _LINE_KIND.get(line_type, f"type_{line_type}"),
+            "start_mm": list(start),
+            "end_mm": list(end),
+        }
+    if short == "Junction":
+        x, y = _pos_mm(getattr(msg, "position", None))
+        return "junction", {"id": item_id, "x_mm": x, "y_mm": y}
+    # Label family: Local/Global/Hierarchical/Directive.
+    kind = short.lower().replace("label", "_label")
+    x, y = _pos_mm(getattr(msg, "position", None))
+    return "label", {
+        "id": item_id,
+        "label_type": kind,
+        "text": _field_text(msg),
+        "x_mm": x,
+        "y_mm": y,
+    }
+
+
+class IPCBackend(KiCadBackend):
+    """Live KiCad IPC protocol backend (schematic lane, Part 6).
+
+    Optional `fallback` (e.g. a file-targeted SexprBackend) receives any
+    SCHEMATIC-domain action the live server cannot serve: connection loss,
+    IPC refusal (NOT_READY/UNIMPLEMENTED on KiCad 10.0.4 schematic writes),
+    or actions not yet mapped to IPC. Failover results are marked with
+    data["fallback_used"]=True and backend_used "ipc-><name>". PCB-domain
+    actions NEVER fail over (pcbnew owns PCB).
+    """
+
+    # Backend-level errors eligible for schematic failover.
+    FAILOVER_CATEGORIES = frozenset({
+        ErrorCategory.CONNECTION_ERROR,
+        ErrorCategory.IPC_ERROR,
+        ErrorCategory.INVALID_ACTION,
+    })
+
+    def __init__(self, client: Optional[KiCadIPCClient] = None, socket_path: Optional[str] = None,
+                 fallback: Optional[KiCadBackend] = None):
         self.client = client or KiCadIPCClient(socket_path=socket_path)
+        self.fallback = fallback
         self._doc_proto = None
 
     @property
@@ -53,108 +182,3 @@ class IPCBackend(KiCadBackend):
 
     def disconnect(self) -> None:
         self.client.close()
-
-    def _get_document(self, doc_type: int = DocumentType.DOCTYPE_SCHEMATIC):
-        if self._doc_proto is not None and getattr(self._doc_proto, "type", None) == doc_type:
-            return self._doc_proto
-
-        _, _, GetOpenDocuments, GetOpenDocumentsResponse = get_editor_command_protos()
-        cmd = GetOpenDocuments()
-        cmd.type = doc_type
-        try:
-            resp = self.client.send(cmd, GetOpenDocumentsResponse)
-            if resp.documents:
-                self._doc_proto = resp.documents[0]
-                return self._doc_proto
-        except Exception:
-            pass
-
-        # Fallback dummy DocumentSpecifier
-        _, _, _, DocumentSpecifier, _ = get_base_type_protos()
-        doc = DocumentSpecifier()
-        doc.type = doc_type
-        self._doc_proto = doc
-        return self._doc_proto
-
-    def load_board(self, filepath: str) -> Dict[str, Any]:
-        return self.get_state("pcb")
-
-    def save_board(self, filepath: Optional[str] = None) -> bool:
-        return True
-
-    def load_schematic(self, filepath: str) -> Dict[str, Any]:
-        return self.get_state("schematic")
-
-    def save_schematic(self, filepath: Optional[str] = None) -> bool:
-        return True
-
-    def get_state(self, domain: str = "pcb") -> Dict[str, Any]:
-        doc_type = DocumentType.DOCTYPE_PCB if domain == "pcb" else DocumentType.DOCTYPE_SCHEMATIC
-        doc = self._get_document(doc_type)
-        return {
-            "board_filename": getattr(doc, "board_filename", ""),
-            "project_name": getattr(doc.project, "name", "") if hasattr(doc, "project") else "",
-        }
-
-    def execute(self, action: Action) -> ActionResult:
-        t0 = time.time()
-        p = action.parameters
-
-        try:
-            if action.action_type == ActionType.ADD_JUNCTION:
-                from proto.schematic.schematic_types_pb2 import Junction  # type: ignore[import]
-                CreateItems, CreateItemsResponse, _, _ = get_editor_command_protos()
-
-                doc = self._get_document(DocumentType.DOCTYPE_SCHEMATIC)
-                pos = p.get("position", (p.get("x", 0), p.get("y", 0)))
-
-                junc = Junction()
-                junc.id.value = str(uuid.uuid4())
-                junc.position.x_nm = int(pos[0] * 1e6)
-                junc.position.y_nm = int(pos[1] * 1e6)
-
-                any_item = ProtoAny()
-                any_item.Pack(junc)
-
-                cmd = CreateItems()
-                cmd.header.document.CopyFrom(doc)
-                cmd.items.append(any_item)
-
-                resp = self.client.send(cmd, CreateItemsResponse)
-                return ActionResult(
-                    action_id=action.action_id,
-                    success=True,
-                    data={"id": junc.id.value, "items_created": len(resp.created_items)},
-                    execution_time_ms=(time.time() - t0) * 1000,
-                    backend_used=self.name,
-                )
-
-            elif action.action_type == ActionType.GET_STATE:
-                state = self.get_state(action.domain.value)
-                return ActionResult(
-                    action_id=action.action_id,
-                    success=True,
-                    data=state,
-                    execution_time_ms=(time.time() - t0) * 1000,
-                    backend_used=self.name,
-                )
-
-            else:
-                raise AgentError(
-                    category=ErrorCategory.INVALID_ACTION,
-                    message=f"Live IPC command execution for {action.action_type} not yet mapped or requires fallback",
-                )
-
-        except Exception as e:
-            err = e if isinstance(e, AgentError) else AgentError(
-                category=ErrorCategory.IPC_ERROR,
-                message=str(e),
-                operation=action.action_type.value,
-            )
-            return ActionResult(
-                action_id=action.action_id,
-                success=False,
-                error=err,
-                execution_time_ms=(time.time() - t0) * 1000,
-                backend_used=self.name,
-            )
