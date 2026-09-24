@@ -28,6 +28,7 @@ except ImportError:
     sys.modules["pcbnew"] = mock_pcbnew
 
 from kicad_agent.agent.agent import KiCadAgent
+from kicad_agent.backends.ipc import IPCBackend
 from kicad_agent.backends.pcbnew import PcbnewBackend
 from kicad_agent.backends.sexpr import SexprBackend
 
@@ -36,7 +37,8 @@ def main():
     parser = argparse.ArgumentParser(description="KiCad PCB AI Agent")
     parser.add_argument("request", nargs="?", default="Create a PCB with an Arduino Leonardo, LED, resistor and connector", help="Natural language PCB design prompt")
     parser.add_argument("--board", default="", help="Path to .kicad_pcb board file to load")
-    parser.add_argument("--backend", choices=["pcbnew", "sexpr", "auto"], default="auto", help="Execution backend adapter")
+    parser.add_argument("--backend", choices=["pcbnew", "sexpr", "ipc", "auto"], default="auto", help="Execution backend adapter")
+    parser.add_argument("--fallback-file", default="", help="Schematic file for IPC failover (SexprBackend target, Part 9 L4)")
     parser.add_argument("--verbose", action="store_true", default=True, help="Print detailed trace log")
     args = parser.parse_args()
 
@@ -45,6 +47,10 @@ def main():
         backend = PcbnewBackend()
     elif args.backend == "sexpr":
         backend = SexprBackend(pcb_filepath=args.board or "board.kicad_pcb")
+    elif args.backend == "ipc":
+        backend = IPCBackend()
+        if args.fallback_file:
+            backend.fallback = SexprBackend(sch_filepath=args.fallback_file)
     else:
         pcb_be = PcbnewBackend()
         backend = pcb_be if pcb_be.is_available() else SexprBackend(pcb_filepath=args.board or "board.kicad_pcb")
