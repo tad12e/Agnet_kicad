@@ -56,6 +56,61 @@ class ItemStatusCode:
     ISC_INVALID_DATA = 7
 
 
+class ItemRequestStatus:
+    """Matches kiapi.common.types.ItemRequestStatus in base_types.proto."""
+    IRS_UNKNOWN = 0
+    IRS_OK = 1
+    IRS_DOCUMENT_NOT_FOUND = 2
+    IRS_FIELD_MASK_INVALID = 3
+
+
+class CommitAction:
+    """Matches kiapi.common.commands.CommitAction in editor_commands.proto."""
+    CMA_UNKNOWN = 0
+    CMA_COMMIT = 1
+    CMA_DROP = 2
+
+
+class ItemDeletionStatus:
+    """Matches kiapi.common.commands.ItemDeletionStatus in editor_commands.proto."""
+    IDS_UNKNOWN = 0
+    IDS_OK = 1
+    IDS_NONEXISTENT = 2
+    IDS_IMMUTABLE = 3
+
+
+class KiCadObjectType:
+    """Subset of kiapi.common.types.KiCadObjectType (enums.proto) used here."""
+    KOT_UNKNOWN = 0
+    KOT_SCH_MARKER = 18
+    KOT_SCH_JUNCTION = 19
+    KOT_SCH_NO_CONNECT = 20
+    KOT_SCH_BUS_WIRE_ENTRY = 21
+    KOT_SCH_BUS_BUS_ENTRY = 22
+    KOT_SCH_LINE = 23
+    KOT_SCH_LABEL = 30
+    KOT_SCH_GLOBAL_LABEL = 31
+    KOT_SCH_HIER_LABEL = 32
+    KOT_SCH_DIRECTIVE_LABEL = 33
+    KOT_SCH_SYMBOL = 35
+    KOT_SCH_SHEET = 37
+    KOT_SCH_PIN = 38
+    KOT_SCH_GROUP = 51
+
+
+# Schematic item types listed by a single GetItems read. NOTE: pass explicit
+# types always — an empty filter is an error on KiCad < 10.0.7.
+SCHEMATIC_ITEM_TYPES = (
+    KiCadObjectType.KOT_SCH_SYMBOL,
+    KiCadObjectType.KOT_SCH_LINE,
+    KiCadObjectType.KOT_SCH_JUNCTION,
+    KiCadObjectType.KOT_SCH_LABEL,
+    KiCadObjectType.KOT_SCH_GLOBAL_LABEL,
+    KiCadObjectType.KOT_SCH_HIER_LABEL,
+    KiCadObjectType.KOT_SCH_DIRECTIVE_LABEL,
+)
+
+
 def get_envelope_protos():
     """Import and return the ApiRequest/ApiResponse envelope classes."""
     try:
