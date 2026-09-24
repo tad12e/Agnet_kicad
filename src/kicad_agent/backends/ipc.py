@@ -625,3 +625,300 @@ class IPCBackend(KiCadBackend):
             except AgentError as e:
                 state[section] = {"error": e.message}
         return state
+
+    def _should_failover(self, action: Action, err: AgentError) -> bool:
+        """Schematic-only failover gate (Part 6)."""
+        return (
+            self.fallback is not None
+            and action.domain == ActionDomain.SCHEMATIC
+            and err.category in self.FAILOVER_CATEGORIES
+        )
+
+    def _execute_fallback(self, action: Action, t0: float, ipc_error: AgentError) -> ActionResult:
+        """Delegate to the fallback backend, marking the result honestly."""
+        assert self.fallback is not None
+        try:
+            result = self.fallback.execute(action)
+        except Exception as e:
+            return ActionResult(
+                action_id=action.action_id,
+                success=False,
+                error=AgentError(
+                    category=ErrorCategory.IPC_ERROR,
+                    message=f"IPC failed ({ipc_error.message}) and fallback "
+                    f"{self.fallback.name} raised: {e}",
+                ),
+                execution_time_ms=(time.time() - t0) * 1000,
+                backend_used=f"ipc->{self.fallback.name}",
+            )
+        if not isinstance(result.data, dict):
+            result.data = {"result": result.data}
+        result.data["fallback_used"] = True
+        result.data["ipc_error"] = ipc_error.message
+        result.backend_used = f"ipc->{self.fallback.name}"
+        return result
+
+    def execute(self, action: Action) -> ActionResult:
+        t0 = time.time()
+        try:
+            return self._execute_live(action, t0)
+        except Exception as e:
+            err = e if isinstance(e, AgentError) else AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=str(e),
+                operation=action.action_type.value,
+            )
+            if self._should_failover(action, err):
+                return self._execute_fallback(action, t0, err)
+            return ActionResult(
+                action_id=action.action_id,
+                success=False,
+                error=err,
+                execution_time_ms=(time.time() - t0) * 1000,
+                backend_used=self.name,
+            )
+
+    def _execute_live(self, action: Action, t0: float) -> ActionResult:
+        p = action.parameters
+
+        try:
+            if action.action_type == ActionType.ADD_JUNCTION:
+                from proto.schematic.schematic_types_pb2 import Junction  # type: ignore[import]
+
+                doc = self._get_document(DocumentType.DOCTYPE_SCHEMATIC)
+                pos = p.get("position", (p.get("x", 0), p.get("y", 0)))
+
+                junc = Junction()
+                junc.id.value = str(uuid.uuid4())
+                junc.position.x_nm = int(pos[0] * 1e6)
+                junc.position.y_nm = int(pos[1] * 1e6)
+
+                any_item = ProtoAny()
+                any_item.Pack(junc)
+
+                def _create():
+                    resp = self.create_items(doc, [any_item])
+                    created_id = self._created_id(resp, Junction)
+                    if not created_id:
+                        raise AgentError(
+                            category=ErrorCategory.IPC_ERROR,
+                            message="Server echoed junction without an id "
+                            "(silent reject).",
+                        )
+                    return {"resp": resp, "created_id": created_id}
+
+                # Commit lifecycle: a failed write must DROP, never linger.
+                out = self._run_commit(doc, f"add junction {junc.id.value}", _create)
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"id": out["created_id"],
+                          "items_created": len(out["resp"].created_items)},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.ADD_WIRE:
+                classes = _schematic_type_classes()
+                doc = self._get_document(DocumentType.DOCTYPE_SCHEMATIC)
+                start = p.get("start", [p.get("x1", 0.0), p.get("y1", 0.0)])
+                end = p.get("end", [p.get("x2", 0.0), p.get("y2", 0.0)])
+                line_type = 2 if str(p.get("kind", "wire")).lower() == "bus" else 1
+
+                line = classes["SchematicLine"]()
+                line.id.value = str(uuid.uuid4())
+                line.start.x_nm = int(float(start[0]) * 1e6)
+                line.start.y_nm = int(float(start[1]) * 1e6)
+                line.end.x_nm = int(float(end[0]) * 1e6)
+                line.end.y_nm = int(float(end[1]) * 1e6)
+                line.type = line_type
+
+                any_item = ProtoAny()
+                any_item.Pack(line)
+
+                def _create_wire():
+                    resp = self.create_items(doc, [any_item])
+                    created_id = self._created_id(resp, classes["SchematicLine"])
+                    if not created_id:
+                        raise AgentError(
+                            category=ErrorCategory.IPC_ERROR,
+                            message="Server echoed wire without an id (silent reject).",
+                        )
+                    return {"resp": resp, "created_id": created_id}
+
+                out = self._run_commit(doc, f"add wire {line.id.value}", _create_wire)
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"id": out["created_id"],
+                          "items_created": len(out["resp"].created_items)},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.ADD_LABEL:
+                classes = _schematic_type_classes()
+                doc = self._get_document(DocumentType.DOCTYPE_SCHEMATIC)
+                label_type = str(p.get("label_type", p.get("kind", "local"))).lower()
+                cls_name = {
+                    "local": "LocalLabel",
+                    "global": "GlobalLabel",
+                    "hierarchical": "HierarchicalLabel",
+                    "hier": "HierarchicalLabel",
+                }.get(label_type)
+                if cls_name is None:
+                    raise AgentError(
+                        category=ErrorCategory.INVALID_ACTION,
+                        message=f"Unsupported label_type '{label_type}' for IPC "
+                        "(local/global/hierarchical).",
+                    )
+                pos = p.get("position", (p.get("x", 0.0), p.get("y", 0.0)))
+
+                label = classes[cls_name]()
+                label.id.value = str(uuid.uuid4())
+                label.position.x_nm = int(float(pos[0]) * 1e6)
+                label.position.y_nm = int(float(pos[1]) * 1e6)
+                label.text.text = str(p.get("text", ""))
+
+                any_item = ProtoAny()
+                any_item.Pack(label)
+
+                def _create_label():
+                    resp = self.create_items(doc, [any_item])
+                    created_id = self._created_id(resp, classes[cls_name])
+                    if not created_id:
+                        raise AgentError(
+                            category=ErrorCategory.IPC_ERROR,
+                            message="Server echoed label without an id (silent reject).",
+                        )
+                    return {"resp": resp, "created_id": created_id}
+
+                out = self._run_commit(doc, f"add label {label.id.value}", _create_label)
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"id": out["created_id"],
+                          "items_created": len(out["resp"].created_items)},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.MOVE_SYMBOL:
+                classes = _schematic_type_classes()
+                doc = self._get_document(DocumentType.DOCTYPE_SCHEMATIC)
+                reference = p.get("reference", p.get("ref", ""))
+                if not reference:
+                    raise AgentError(
+                        category=ErrorCategory.INVALID_ACTION,
+                        message="MOVE_SYMBOL requires a reference.",
+                    )
+                try:
+                    x_mm = float(p["x"])
+                    y_mm = float(p["y"])
+                except (KeyError, TypeError, ValueError) as e:
+                    raise AgentError(
+                        category=ErrorCategory.INVALID_ACTION,
+                        message="MOVE_SYMBOL requires numeric x/y.",
+                    ) from e
+
+                symbol_id = self._resolve_symbol_id(doc, str(reference))
+
+                def _move():
+                    fetched = self.get_items_by_id(doc, [symbol_id])
+                    if not fetched:
+                        raise AgentError(
+                            category=ErrorCategory.MISSING_OBJECT,
+                            message=f"Symbol id '{symbol_id}' vanished before update.",
+                        )
+                    sym = classes["SchematicSymbolInstance"]()
+                    if not fetched[0].Unpack(sym):
+                        raise AgentError(
+                            category=ErrorCategory.IPC_ERROR,
+                            message="Fetched symbol did not unpack.",
+                        )
+                    sym.position.x_nm = int(x_mm * 1e6)
+                    sym.position.y_nm = int(y_mm * 1e6)
+                    packed = ProtoAny()
+                    packed.Pack(sym)
+                    resp = self.update_items(doc, [packed])
+                    updated = classes["SchematicSymbolInstance"]()
+                    if not (resp.updated_items
+                            and resp.updated_items[0].item.Unpack(updated)):
+                        raise AgentError(
+                            category=ErrorCategory.IPC_ERROR,
+                            message="Update response did not echo the symbol.",
+                        )
+                    if (getattr(updated.id, "value", "") or "") != symbol_id:
+                        raise AgentError(
+                            category=ErrorCategory.IPC_ERROR,
+                            message="Update echoed a different symbol id.",
+                        )
+                    return {"id": symbol_id}
+
+                out = self._run_commit(doc, f"move symbol {reference}", _move)
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"id": out["id"], "reference": reference,
+                          "x": x_mm, "y": y_mm},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.DELETE_SYMBOL:
+                doc = self._get_document(DocumentType.DOCTYPE_SCHEMATIC)
+                symbol_id = str(p.get("id", "") or "")
+                reference = str(p.get("reference", p.get("ref", "")) or "")
+                if not symbol_id and not reference:
+                    raise AgentError(
+                        category=ErrorCategory.INVALID_ACTION,
+                        message="DELETE_SYMBOL requires an id or reference.",
+                    )
+                if not symbol_id:
+                    symbol_id = self._resolve_symbol_id(doc, reference)
+
+                def _delete():
+                    self.delete_items_by_id(doc, [symbol_id])
+                    return {"id": symbol_id}
+
+                out = self._run_commit(doc, f"delete symbol {symbol_id}", _delete)
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"id": out["id"], "reference": reference},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.GET_STATE:
+                state = self.get_state(action.domain.value)
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data=state,
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            else:
+                if action.domain == ActionDomain.PCB:
+                    raise AgentError(
+                        category=ErrorCategory.INVALID_ACTION,
+                        message=f"IPCBackend is schematic-only; PCB action "
+                        f"{action.action_type} belongs to PcbnewBackend.",
+                    )
+                raise AgentError(
+                    category=ErrorCategory.INVALID_ACTION,
+                    message=f"Live IPC command execution for {action.action_type} not yet mapped or requires fallback",
+                )
+
+        except Exception as e:
+            # Re-raise for execute(): it converts to a failed result and,
+            # for schematic actions, engages the fallback backend (Part 6).
+            if isinstance(e, AgentError):
+                raise
+            raise AgentError(
+                category=ErrorCategory.IPC_ERROR,
+                message=str(e),
+                operation=action.action_type.value,
+            ) from e
