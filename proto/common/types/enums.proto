@@ -1,6 +1,6 @@
 /*
  * KiCad API Protocol Buffer: Common Enums
- * Source: https://gitlab.com/kicad/code/kicad/-/blob/master/api/proto/common/types/enums.proto
+ * Source: https://gitlab.com/kicad/code/kicad/-/blob/10.0/api/proto/common/types/enums.proto
  */
 
 syntax = "proto3";
@@ -62,8 +62,12 @@ enum KiCadObjectType
 
   KOT_SCH_GROUP = 51;
   KOT_PCB_BARCODE = 52;
-  KOT_PCB_CONSTRAINT = 53;
-  KOT_PCB_GRIDITEM = 54;
+
+  reserved 53;
+  reserved 54;
+  reserved 55;
+
+  KOT_PCB_POINT = 56;
 }
 
 enum HorizontalAlignment
