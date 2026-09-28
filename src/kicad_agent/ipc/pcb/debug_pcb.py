@@ -4,19 +4,33 @@ Safe inspection tools for the LLM to find bugs WITHOUT mutating the board:
 - No BeginCommit / EndCommit / Create / Update / Delete here.
 - Every function is a single IPC read; failures raise PCBDebugError with
   the KiCad status string preserved.
+
+Verified against local proto/:
+- HitTest{header, id, position, tolerance} -> HitTestResponse{result}
+  (HTR_HIT=2, HTR_NO_HIT=1).
+- GetBoundingBox{header, items, mode} -> {items, boxes}; items[i]<->boxes[i].
+- GetSelection{header, types} -> SelectionResponse{items}.
+- SaveSelectionToString{} -> SavedSelectionResponse{ids, contents}.
+- GetBoardDesignRules{board} -> BoardDesignRulesResponse.
+- GetCustomDesignRules{board} -> CustomRulesResponse{status, rules, error}.
+- GetNetClassForNets{net:[{name,code}]} -> NetClassForNetsResponse{classes}.
+- GetPadShapeAsPolygon{board, pads, layer} -> {pads, polygons}.
+- CheckPadstackPresenceOnLayers{board, items, layers} -> {entries}.
+- GetBoardEditorAppearanceSettings{} -> BoardEditorAppearanceSettings.
+- Omitted (absent from local 10.0.x protos): ExpandTextVariables,
+  GetBoardBoundingBox, GetDocumentModifiedState.
+
+Proto classes are resolved straight from generated pb2 modules because the
+messages_pcb name-maps only cover a subset (no HitTestResult enum, no Box2,
+no GetBoardDesignRules/GetCustomDesignRules on older 10.0.x protos).
 """
 
 from __future__ import annotations
 
-from typing import Any
+import hashlib
+from typing import Any, Dict
 
-from .messages_pcb import (
-    get_base_type,
-    get_board_command,
-    get_board_type,
-    get_editor_command,
-)
-from ..client import KiCadIPCClient
+from .messages_pcb import get_base_type
 from ..messages import ItemRequestStatus
 
 
@@ -67,23 +81,18 @@ def _header_for(doc) -> Any:
     return header
 
 
-def _require_proto(getter, name: str) -> Any:
-    try:
-        return getter(name)
-    except (ImportError, KeyError, AttributeError) as e:
-        raise PCBDebugError(
-            f"{name} is not available in the local 10.0.x protos: {e}"
-        ) from e
-
-
 def _check_items_status(resp: Any, op: str) -> None:
     status = getattr(resp, "status", ItemRequestStatus.IRS_OK)
     if status != ItemRequestStatus.IRS_OK:
         raise PCBDebugError(f"{op} rejected: status={status}")
 
-def hit_test(client, doc, kiid, x_mm, y_mm, tolerance_nm=0):
-    """Probe whether (x_mm, y_mm) hits item kiid (HTR_HIT=2, NO_HIT=1)."""
-    from typing import Dict
+
+def hit_test(client, doc, kiid: str, x_mm: float, y_mm: float,
+             tolerance_nm: int = 0) -> Dict[str, Any]:
+    """Probe whether (x_mm, y_mm) hits item ``kiid``.
+
+    Returns {"hit": bool, "raw": int} with raw = HTR_* (HIT=2, NO_HIT=1).
+    """
     HitTest = _editor_proto("HitTest")
     HitTestResponse = _editor_proto("HitTestResponse")
     HitTestResult = _editor_proto("HitTestResult")
