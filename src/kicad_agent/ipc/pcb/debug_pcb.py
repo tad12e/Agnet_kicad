@@ -143,3 +143,33 @@ def get_bboxes(client, doc, kiids, mode=1, container_kiid=None):
         })
     return out
 
+
+
+def get_selection(client, doc, item_types=None, container_kiid=None):
+    """Return currently selected items (unpacked Any list)."""
+    GetSelection = _editor_proto("GetSelection")
+    SelectionResponse = _editor_proto("SelectionResponse")
+    cmd = GetSelection()
+    cmd.header.CopyFrom(_header_for(doc))
+    if container_kiid:
+        KIID = get_base_type("KIID")
+        kid0 = KIID()
+        kid0.value = container_kiid
+        cmd.header.container.CopyFrom(kid0)
+    if item_types:
+        cmd.types.extend(list(item_types))
+    resp = _wrap("GetSelection", lambda: client.send(cmd, SelectionResponse))
+    return list(getattr(resp, "items", []))
+
+
+def save_selection(client):
+    """Return {"ids": [...], "contents": sexpr} for the live selection."""
+    SaveSelectionToString = _editor_proto("SaveSelectionToString")
+    SavedSelectionResponse = _editor_proto("SavedSelectionResponse")
+    resp = _wrap("SaveSelectionToString",
+                 lambda: client.send(SaveSelectionToString(),
+                                     SavedSelectionResponse))
+    return {
+        "ids": [getattr(k, "value", "") for k in getattr(resp, "ids", [])],
+        "contents": getattr(resp, "contents", "") or "",
+    }

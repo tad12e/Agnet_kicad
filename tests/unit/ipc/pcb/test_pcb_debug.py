@@ -80,3 +80,32 @@ def test_get_bboxes_empty_rejected():
         assert "at least one KIID" in str(e)
     else:
         raise AssertionError("expected PCBDebugError")
+
+
+def test_selection_and_save_selection():
+    class _FakeSelClient:
+        def __init__(self):
+            self.sel_types = None
+
+        def send(self, command, response_type):
+            name = type(command).__name__
+            if name == "GetSelection":
+                SelectionResponse = _editor_proto("SelectionResponse")
+                self.sel_types = list(command.types)
+                return SelectionResponse()
+            if name == "SaveSelectionToString":
+                SavedSelectionResponse = _editor_proto(
+                    "SavedSelectionResponse")
+                resp = SavedSelectionResponse()
+                kid = _base_proto("KIID")()
+                kid.value = "sel-1"
+                resp.ids.append(kid)
+                resp.contents = "(footprint sel)"
+                return resp
+            raise AssertionError(f"unexpected: {name}")
+
+    client = _FakeSelClient()
+    assert debug_pcb.get_selection(client, _doc(), item_types=[1]) == []
+    assert client.sel_types == [1]
+    saved = debug_pcb.save_selection(client)
+    assert saved == {"ids": ["sel-1"], "contents": "(footprint sel)"}
