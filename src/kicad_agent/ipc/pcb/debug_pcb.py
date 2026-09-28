@@ -80,3 +80,66 @@ def _check_items_status(resp: Any, op: str) -> None:
     status = getattr(resp, "status", ItemRequestStatus.IRS_OK)
     if status != ItemRequestStatus.IRS_OK:
         raise PCBDebugError(f"{op} rejected: status={status}")
+
+def hit_test(client, doc, kiid, x_mm, y_mm, tolerance_nm=0):
+    """Probe whether (x_mm, y_mm) hits item kiid (HTR_HIT=2, NO_HIT=1)."""
+    from typing import Dict
+    HitTest = _editor_proto("HitTest")
+    HitTestResponse = _editor_proto("HitTestResponse")
+    HitTestResult = _editor_proto("HitTestResult")
+    Vector2 = get_base_type("Vector2")
+    KIID = get_base_type("KIID")
+    cmd = HitTest()
+    cmd.header.CopyFrom(_header_for(doc))
+    kid = KIID()
+    kid.value = kiid
+    cmd.id.CopyFrom(kid)
+    pos = Vector2()
+    pos.x_nm = int(round(x_mm * _NM_PER_MM))
+    pos.y_nm = int(round(y_mm * _NM_PER_MM))
+    cmd.position.CopyFrom(pos)
+    cmd.tolerance = int(tolerance_nm)
+    resp = _wrap("HitTest", lambda: client.send(cmd, HitTestResponse))
+    raw = int(getattr(resp, "result", 0))
+    return {"hit": raw == int(getattr(HitTestResult, "HTR_HIT", 2)),
+            "raw": raw}
+
+
+def get_bboxes(client, doc, kiids, mode=1, container_kiid=None):
+    """Return [{kiid, x_mm, y_mm, w_mm, h_mm}] (mode 1/2)."""
+    if not kiids:
+        raise PCBDebugError("get_bboxes needs at least one KIID.")
+    GetBoundingBox = _editor_proto("GetBoundingBox")
+    GetBoundingBoxResponse = _editor_proto("GetBoundingBoxResponse")
+    KIID = get_base_type("KIID")
+    cmd = GetBoundingBox()
+    cmd.header.CopyFrom(_header_for(doc))
+    if container_kiid:
+        kid0 = KIID()
+        kid0.value = container_kiid
+        cmd.header.container.CopyFrom(kid0)
+    for k in kiids:
+        kid = KIID()
+        kid.value = k
+        cmd.items.append(kid)
+    cmd.mode = int(mode)
+    resp = _wrap("GetBoundingBox",
+                 lambda: client.send(cmd, GetBoundingBoxResponse))
+    out = []
+    items = list(getattr(resp, "items", []))
+    boxes = list(getattr(resp, "boxes", []))
+    for i, kid in enumerate(items):
+        if i >= len(boxes):
+            break
+        box = boxes[i]
+        pos = getattr(box, "position", None)
+        size = getattr(box, "size", None)
+        out.append({
+            "kiid": getattr(kid, "value", ""),
+            "x_mm": getattr(pos, "x_nm", 0) / _NM_PER_MM,
+            "y_mm": getattr(pos, "y_nm", 0) / _NM_PER_MM,
+            "w_mm": getattr(size, "x_nm", 0) / _NM_PER_MM,
+            "h_mm": getattr(size, "y_nm", 0) / _NM_PER_MM,
+        })
+    return out
+
