@@ -236,3 +236,58 @@ def test_appearance():
     client = _FakeRulesClient()
     assert debug_pcb.get_appearance(client)["inactive_layer_display"] == 2
 
+
+class _FakeBundleClient(_FakeRulesClient):
+    """Adds stackup/layers/sexpr reads and optional transport failure."""
+
+    def __init__(self, mode="ok"):
+        super().__init__()
+        self.mode = mode
+
+    def send(self, command, response_type):
+        name = type(command).__name__
+        if self.mode == "boom" and name in (
+                "GetBoundingBox", "GetCustomDesignRules"):
+            raise RuntimeError("transport down")
+        if name == "GetBoardStackup":
+            return _board_proto("BoardStackupResponse")()
+        if name == "GetBoardEnabledLayers":
+            return _board_proto("BoardEnabledLayersResponse")()
+        if name == "SaveDocumentToString":
+            resp = _editor_proto("SavedDocumentResponse")()
+            resp.contents = "(kicad_pcb dbg)"
+            return resp
+        if name == "HitTest":
+            resp = _editor_proto("HitTestResponse")()
+            resp.result = 2
+            return resp
+        if name == "GetBoundingBox":
+            return _FakeGeoClient().send(command, response_type)
+        if name == "GetSelection":
+            return _editor_proto("SelectionResponse")()
+        if name == "SaveSelectionToString":
+            resp = _editor_proto("SavedSelectionResponse")()
+            kid = _base_proto("KIID")()
+            kid.value = "sel-1"
+            resp.ids.append(kid)
+            resp.contents = "(footprint sel)"
+            return resp
+        return super().send(command, response_type)
+
+
+def test_debug_bundle_ok_and_partial_failure():
+    client = _FakeBundleClient()
+    bundle = debug_pcb.get_debug_bundle(
+        client, _doc(), kiids=["a"],
+        hit_probe={"kiid": "a", "x_mm": 1.0, "y_mm": 1.0})
+    assert bundle["bboxes"][0]["kiid"] == "a"
+    assert bundle["hit"]["hit"] is True
+    assert bundle["custom_rules"]["status"] == 3
+    assert len(bundle["sexpr"]["sha256"]) == 64
+    bad = _FakeBundleClient(mode="boom")
+    partial = debug_pcb.get_debug_bundle(bad, _doc(), kiids=["a"])
+    assert "error" in partial["bboxes"]
+    assert "error" in partial["custom_rules"]
+    assert "hit" not in partial
+
+

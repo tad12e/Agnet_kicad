@@ -316,3 +316,42 @@ def get_appearance(client):
         "board_flip": int(getattr(resp, "board_flip", 0)),
         "ratsnest_display": int(getattr(resp, "ratsnest_display", 0)),
     }
+
+
+def get_debug_bundle(client, doc, kiids=None, hit_probe=None):
+    """Collect one JSON-friendly debug blob (reads only, never writes)."""
+    import hashlib
+    from .snapshot import PCBSnapshotReader
+    reader = PCBSnapshotReader(client)
+    bundle = {}
+
+    def _try(key, fn):
+        try:
+            bundle[key] = fn()
+        except Exception as e:
+            bundle[key] = {"error": str(e)}
+
+    _try("board_info", reader.get_board_info)
+    _try("nets_count", lambda: len(reader.get_nets()))
+    _try("stackup", reader.get_board_stackup)
+    _try("enabled_layers", reader.get_board_enabled_layers)
+    _try("selection_count", lambda: len(get_selection(client, doc)))
+    _try("selection", lambda: save_selection(client))
+    _try("design_rules", lambda: get_design_rules(client, doc))
+    _try("custom_rules", lambda: get_custom_rules(client, doc))
+    _try("appearance", lambda: get_appearance(client))
+    if kiids:
+        _try("bboxes", lambda: get_bboxes(client, doc, kiids))
+    if hit_probe:
+        _try("hit", lambda: hit_test(
+            client, doc, hit_probe["kiid"],
+            float(hit_probe["x_mm"]), float(hit_probe["y_mm"]),
+            int(hit_probe.get("tolerance_nm", 0))))
+
+    def _sexpr_hash():
+        text = reader.save_document_to_string()
+        return {"sha256": hashlib.sha256(
+            text.encode("utf-8")).hexdigest(), "length": len(text)}
+
+    _try("sexpr", _sexpr_hash)
+    return bundle
