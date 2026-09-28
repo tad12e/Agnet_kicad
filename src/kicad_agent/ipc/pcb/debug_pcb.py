@@ -246,3 +246,73 @@ def get_items_by_netclass(client, doc, net_classes, item_types=None,
                  lambda: client.send(cmd, GetItemsResponse))
     _check_items_status(resp, "GetItemsByNetClass")
     return list(getattr(resp, "items", []))
+
+
+def get_pad_polygon(client, doc, pad_kiids, layer):
+    """Return tessellated flashed shape per pad: [{pad, polygons}]."""
+    if not pad_kiids:
+        raise PCBDebugError("get_pad_polygon needs a pad KIID.")
+    GetPadShapeAsPolygon = _board_proto("GetPadShapeAsPolygon")
+    PadShapeAsPolygonResponse = _board_proto("PadShapeAsPolygonResponse")
+    KIID = get_base_type("KIID")
+    cmd = GetPadShapeAsPolygon()
+    cmd.board.CopyFrom(doc)
+    for k in pad_kiids:
+        kid = KIID()
+        kid.value = k
+        cmd.pads.append(kid)
+    cmd.layer = int(layer)
+    resp = _wrap("GetPadShapeAsPolygon",
+                 lambda: client.send(cmd, PadShapeAsPolygonResponse))
+    pads = list(getattr(resp, "pads", []))
+    polys = list(getattr(resp, "polygons", []))
+    out = []
+    for i, pad in enumerate(pads):
+        if i >= len(polys):
+            break
+        out.append({"pad": getattr(pad, "value", ""),
+                    "polygons": polys[i]})
+    return out
+
+
+def check_padstack(client, doc, kiids, layers):
+    """Return [{item, layer, presence}] (1=PRESENT, 2=NOT_PRESENT)."""
+    if not kiids:
+        raise PCBDebugError("check_padstack needs an item KIID.")
+    if not layers:
+        raise PCBDebugError("check_padstack needs a layer.")
+    CheckPadstack = _board_proto("CheckPadstackPresenceOnLayers")
+    PadstackResp = _board_proto("PadstackPresenceResponse")
+    KIID = get_base_type("KIID")
+    cmd = CheckPadstack()
+    cmd.board.CopyFrom(doc)
+    for k in kiids:
+        kid = KIID()
+        kid.value = k
+        cmd.items.append(kid)
+    cmd.layers.extend([int(v) for v in layers])
+    resp = _wrap("CheckPadstackPresenceOnLayers",
+                 lambda: client.send(cmd, PadstackResp))
+    out = []
+    for entry in getattr(resp, "entries", []):
+        out.append({
+            "item": getattr(getattr(entry, "item", None), "value", ""),
+            "layer": int(getattr(entry, "layer", 0)),
+            "presence": int(getattr(entry, "presence", 0)),
+        })
+    return out
+
+
+def get_appearance(client):
+    """Return editor appearance modes (ints, read-only)."""
+    GetAppearance = _board_proto("GetBoardEditorAppearanceSettings")
+    AppearanceSettings = _board_proto("BoardEditorAppearanceSettings")
+    resp = _wrap("GetBoardEditorAppearanceSettings",
+                 lambda: client.send(GetAppearance(), AppearanceSettings))
+    return {
+        "inactive_layer_display": int(
+            getattr(resp, "inactive_layer_display", 0)),
+        "net_color_display": int(getattr(resp, "net_color_display", 0)),
+        "board_flip": int(getattr(resp, "board_flip", 0)),
+        "ratsnest_display": int(getattr(resp, "ratsnest_display", 0)),
+    }

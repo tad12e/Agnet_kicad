@@ -115,6 +115,8 @@ def test_selection_and_save_selection():
 class _FakeRulesClient:
     def __init__(self, by_class=None):
         self.by_class = None
+        self.pad_layer = None
+        self.padstack_layers = None
 
     def send(self, command, response_type):
         name = type(command).__name__
@@ -162,6 +164,34 @@ class _FakeRulesClient:
             from kicad_agent.ipc.messages import ItemRequestStatus
             resp.status = ItemRequestStatus.IRS_OK
             return resp
+        if name == "GetPadShapeAsPolygon":
+            PadShapeAsPolygonResponse = _board_proto(
+                "PadShapeAsPolygonResponse")
+            KIID = _base_proto("KIID")
+            self.pad_layer = command.layer
+            resp = PadShapeAsPolygonResponse()
+            for pad in command.pads:
+                out = KIID()
+                out.value = pad.value
+                resp.pads.append(out)
+                resp.polygons.add()
+            return resp
+        if name == "CheckPadstackPresenceOnLayers":
+            PadstackPresenceResponse = _board_proto(
+                "PadstackPresenceResponse")
+            self.padstack_layers = list(command.layers)
+            resp = PadstackPresenceResponse()
+            entry = resp.entries.add()
+            entry.item.value = "via-1"
+            entry.layer = command.layers[0] if command.layers else 0
+            entry.presence = 1
+            return resp
+        if name == "GetBoardEditorAppearanceSettings":
+            BoardEditorAppearanceSettings = _board_proto(
+                "BoardEditorAppearanceSettings")
+            resp = BoardEditorAppearanceSettings()
+            resp.inactive_layer_display = 2
+            return resp
         raise AssertionError(f"unexpected: {name}")
 
 
@@ -190,3 +220,19 @@ def test_netclass_unknown_net_fails():
         assert "not found" in str(e)
     else:
         raise AssertionError("expected PCBDebugError")
+
+
+def test_pad_probes():
+    client = _FakeRulesClient()
+    polys = debug_pcb.get_pad_polygon(client, _doc(), ["p1"], layer=3)
+    assert len(polys) == 1 and polys[0]["pad"] == "p1"
+    assert client.pad_layer == 3
+    entries = debug_pcb.check_padstack(client, _doc(), ["via-1"], [3])
+    assert entries[0]["presence"] == 1
+    assert client.padstack_layers == [3]
+
+
+def test_appearance():
+    client = _FakeRulesClient()
+    assert debug_pcb.get_appearance(client)["inactive_layer_display"] == 2
+
