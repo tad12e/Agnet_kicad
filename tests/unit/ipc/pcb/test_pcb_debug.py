@@ -5,6 +5,7 @@ from kicad_agent.ipc.pcb import debug_pcb
 from kicad_agent.ipc.pcb.debug_pcb import (
     PCBDebugError,
     _base_proto,
+    _board_proto,
     _editor_proto,
 )
 
@@ -109,3 +110,83 @@ def test_selection_and_save_selection():
     assert client.sel_types == [1]
     saved = debug_pcb.save_selection(client)
     assert saved == {"ids": ["sel-1"], "contents": "(footprint sel)"}
+
+
+class _FakeRulesClient:
+    def __init__(self, by_class=None):
+        self.by_class = None
+
+    def send(self, command, response_type):
+        name = type(command).__name__
+        if name == "GetOpenDocuments":
+            GetOpenDocumentsResponse = _editor_proto(
+                "GetOpenDocumentsResponse")
+            resp = GetOpenDocumentsResponse()
+            doc = resp.documents.add()
+            doc.type = DocumentType.DOCTYPE_PCB
+            doc.board_filename = "dbg.kicad_pcb"
+            return resp
+        if name == "GetBoardDesignRules":
+            BoardDesignRulesResponse = _board_proto(
+                "BoardDesignRulesResponse")
+            resp = BoardDesignRulesResponse()
+            resp.custom_rules_status = 2
+            return resp
+        if name == "GetCustomDesignRules":
+            CustomRulesResponse = _board_proto("CustomRulesResponse")
+            resp = CustomRulesResponse()
+            resp.status = 3
+            resp.error_text = "line 1: bad rule"
+            return resp
+        if name == "GetNets":
+            from kicad_agent.ipc.pcb.messages_pcb import get_board_type as _bt
+            NetsResponse = _board_proto("NetsResponse")
+            Net = _bt("Net")
+            NetCode = _bt("NetCode")
+            resp = NetsResponse()
+            net = Net()
+            net.name = "GND"
+            code = NetCode()
+            code.value = 1
+            net.code.CopyFrom(code)
+            resp.nets.append(net)
+            return resp
+        if name == "GetNetClassForNets":
+            NetClassForNetsResponse = _board_proto(
+                "NetClassForNetsResponse")
+            return NetClassForNetsResponse()
+        if name == "GetItemsByNetClass":
+            GetItemsResponse = _editor_proto("GetItemsResponse")
+            self.by_class = list(command.net_classes)
+            resp = GetItemsResponse()
+            from kicad_agent.ipc.messages import ItemRequestStatus
+            resp.status = ItemRequestStatus.IRS_OK
+            return resp
+        raise AssertionError(f"unexpected: {name}")
+
+
+def test_rules_probes():
+    client = _FakeRulesClient()
+    assert debug_pcb.get_design_rules(
+        client, _doc())["custom_rules_status"] == 2
+    custom = debug_pcb.get_custom_rules(client, _doc())
+    assert custom["status"] == 3
+    assert custom["error_text"] == "line 1: bad rule"
+
+
+def test_netclass_probes():
+    client = _FakeRulesClient()
+    assert debug_pcb.get_netclass_for_nets(client, _doc(), ["GND"]) == {}
+    assert debug_pcb.get_items_by_netclass(
+        client, _doc(), ["Default"]) == []
+    assert client.by_class == ["Default"]
+
+
+def test_netclass_unknown_net_fails():
+    client = _FakeRulesClient()
+    try:
+        debug_pcb.get_netclass_for_nets(client, _doc(), ["NOPE"])
+    except PCBDebugError as e:
+        assert "not found" in str(e)
+    else:
+        raise AssertionError("expected PCBDebugError")

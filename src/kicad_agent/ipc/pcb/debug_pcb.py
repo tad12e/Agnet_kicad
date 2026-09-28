@@ -173,3 +173,76 @@ def save_selection(client):
         "ids": [getattr(k, "value", "") for k in getattr(resp, "ids", [])],
         "contents": getattr(resp, "contents", "") or "",
     }
+
+
+def get_design_rules(client, doc):
+    """Return {"rules": BoardDesignRules, "custom_rules_status": int}."""
+    GetBoardDesignRules = _board_proto("GetBoardDesignRules")
+    BoardDesignRulesResponse = _board_proto("BoardDesignRulesResponse")
+    cmd = GetBoardDesignRules()
+    cmd.board.CopyFrom(doc)
+    resp = _wrap("GetBoardDesignRules",
+                 lambda: client.send(cmd, BoardDesignRulesResponse))
+    return {"rules": resp.rules,
+            "custom_rules_status": int(
+                getattr(resp, "custom_rules_status", 0))}
+
+
+def get_custom_rules(client, doc):
+    """Return {"status": int, "rules": [...], "error_text": str}."""
+    GetCustomDesignRules = _board_proto("GetCustomDesignRules")
+    CustomRulesResponse = _board_proto("CustomRulesResponse")
+    cmd = GetCustomDesignRules()
+    cmd.board.CopyFrom(doc)
+    resp = _wrap("GetCustomDesignRules",
+                 lambda: client.send(cmd, CustomRulesResponse))
+    return {"status": int(getattr(resp, "status", 0)),
+            "rules": list(getattr(resp, "rules", [])),
+            "error_text": getattr(resp, "error_text", "") or ""}
+
+
+def get_netclass_for_nets(client, doc, net_names):
+    """Return {net_name: NetClass} for effective merged netclasses."""
+    if not net_names:
+        raise PCBDebugError("get_netclass_for_nets needs a net name.")
+    from .snapshot import PCBSnapshotReader
+    GetNetClassForNets = _board_proto("GetNetClassForNets")
+    NetClassForNetsResponse = _board_proto("NetClassForNetsResponse")
+    reader = PCBSnapshotReader(client)
+    live = reader.get_nets()
+    by_name = {n["name"]: n["code"] for n in live}
+    cmd = GetNetClassForNets()
+    for name in net_names:
+        if name not in by_name:
+            raise PCBDebugError(f"Net '{name}' not found on board.")
+        code_val = by_name[name]
+        code_int = int(getattr(code_val, "value", code_val))
+        item = cmd.net.add() if hasattr(cmd, "net") else cmd.nets.add()
+        item.name = name
+        item.code.value = code_int
+    resp = _wrap("GetNetClassForNets",
+                 lambda: client.send(cmd, NetClassForNetsResponse))
+    return dict(getattr(resp, "classes", {}))
+
+
+def get_items_by_netclass(client, doc, net_classes, item_types=None,
+                          container_kiid=None):
+    """Return copper items in net_classes (pads/vias/tracks/zones)."""
+    if not net_classes:
+        raise PCBDebugError("get_items_by_netclass needs a net class.")
+    GetItemsByNetClass = _board_proto("GetItemsByNetClass")
+    GetItemsResponse = _editor_proto("GetItemsResponse")
+    cmd = GetItemsByNetClass()
+    cmd.header.CopyFrom(_header_for(doc))
+    if container_kiid:
+        KIID = get_base_type("KIID")
+        kid0 = KIID()
+        kid0.value = container_kiid
+        cmd.header.container.CopyFrom(kid0)
+    if item_types:
+        cmd.types.extend(list(item_types))
+    cmd.net_classes.extend(list(net_classes))
+    resp = _wrap("GetItemsByNetClass",
+                 lambda: client.send(cmd, GetItemsResponse))
+    _check_items_status(resp, "GetItemsByNetClass")
+    return list(getattr(resp, "items", []))
