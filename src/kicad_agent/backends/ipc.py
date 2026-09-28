@@ -233,10 +233,15 @@ class IPCBackend(KiCadBackend):
         )
 
     def begin_commit(self, doc):
-        """Open a KiCad edit commit; returns the commit id proto (Part 4)."""
+        """Open a KiCad edit commit; returns the commit id proto (Part 4).
+
+        NOTE: ``BeginCommit`` carries no ItemHeader in KiCad 10.0 (kipy's
+        ``Board.begin_commit`` sends a bare ``BeginCommit()``), so ``doc`` is
+        accepted for API symmetry but never attached — doing so raises
+        AttributeError: header.
+        """
         BeginCommit, BeginCommitResponse, _, _ = get_commit_protos()
         cmd = BeginCommit()
-        cmd.header.document.CopyFrom(doc)
         try:
             resp = self.client.send(cmd, BeginCommitResponse)
         except AgentError:
@@ -249,13 +254,16 @@ class IPCBackend(KiCadBackend):
         return resp.id
 
     def end_commit(self, commit_id, doc, message: str, drop: bool = False) -> None:
-        """Close a commit (CMA_COMMIT) or roll it back (CMA_DROP)."""
+        """Close a commit (CMA_COMMIT) or roll it back (CMA_DROP).
+
+        Same 10.0 note as begin_commit: ``EndCommit`` has only id/action/message,
+        so no document header is (or can be) attached.
+        """
         _, _, EndCommit, EndCommitResponse = get_commit_protos()
         cmd = EndCommit()
         cmd.id.CopyFrom(commit_id)
         cmd.action = CommitAction.CMA_DROP if drop else CommitAction.CMA_COMMIT
         cmd.message = message
-        cmd.header.document.CopyFrom(doc)
         try:
             self.client.send(cmd, EndCommitResponse)
         except AgentError:
