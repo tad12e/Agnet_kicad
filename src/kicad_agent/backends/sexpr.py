@@ -527,6 +527,273 @@ def add_wire_to_schematic(
     return wire_uuid
 
 
+def _append_block_to_sch(sch_path: str, block_sexp: str) -> None:
+    """Append one top-level S-expression block before the closing paren."""
+    with open(sch_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    last_paren = content.rfind(")")
+    if last_paren != -1:
+        new_content = content[:last_paren].rstrip() + "\n" + block_sexp + "\n)\n"
+    else:
+        new_content = content + "\n" + block_sexp + "\n)\n"
+
+    with open(sch_path, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+
+def add_junction_to_schematic(
+    sch_path: str,
+    pos_x_mm: float,
+    pos_y_mm: float,
+) -> str:
+    """Insert a junction dot into a KiCad schematic file.
+
+    Shape matches KiCad 10 output: (junction (at X Y) (diameter 0)
+    (color 0 0 0 0) (uuid ...)).
+    """
+    junction_uuid = str(uuid.uuid4())
+    junction_sexp = f"""  (junction
+    (at {pos_x_mm} {pos_y_mm})
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid "{junction_uuid}")
+  )"""
+
+    _append_block_to_sch(sch_path, junction_sexp)
+    return junction_uuid
+
+
+def add_label_to_schematic(
+    sch_path: str,
+    text: str,
+    pos_x_mm: float,
+    pos_y_mm: float,
+    label_type: str = "local",
+    rotation: float = 0,
+) -> str:
+    """Insert a label into a KiCad schematic file.
+
+    label_type: 'local' -> (label ...), 'global' -> (global_label ... with
+    shape), 'hierarchical'/'hier' -> (hierarchical_label ... with shape).
+    """
+    kind = str(label_type or "local").lower()
+    if kind in ("global",):
+        tag = "global_label"
+    elif kind in ("hierarchical", "hier"):
+        tag = "hierarchical_label"
+    else:
+        tag = "label"
+
+    label_uuid = str(uuid.uuid4())
+    if tag == "label":
+        label_sexp = f"""  (label "{text}"
+    (at {pos_x_mm} {pos_y_mm} {rotation})
+    (effects (font (size 1.27 1.27)) (justify left bottom))
+    (uuid "{label_uuid}")
+  )"""
+    else:
+        label_sexp = f"""  ({tag} "{text}"
+    (at {pos_x_mm} {pos_y_mm} {rotation})
+    (shape input)
+    (effects (font (size 1.27 1.27)) (justify left bottom))
+    (uuid "{label_uuid}")
+  )"""
+
+    _append_block_to_sch(sch_path, label_sexp)
+    return label_uuid
+
+
+def add_bus_to_schematic(
+    sch_path: str,
+    start: Tuple[float, float],
+    end: Tuple[float, float],
+) -> str:
+    """Insert a bus line into a KiCad schematic file via S-expression."""
+    bus_uuid = str(uuid.uuid4())
+    bus_sexp = f"""  (bus
+    (pts
+      (xy {start[0]} {start[1]}) (xy {end[0]} {end[1]})
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "{bus_uuid}")
+  )"""
+
+    _append_block_to_sch(sch_path, bus_sexp)
+    return bus_uuid
+
+
+def _find_top_level_symbol_block(content: str, reference: str) -> Optional[Tuple[int, int, str]]:
+    """Locate a top-level (symbol ...) instance block by Reference property.
+
+    Top-level instances sit at paren depth 1 and carry (lib_id ...);
+    library definitions inside (lib_symbols ...) sit deeper and are skipped.
+
+    Returns (start, end, block_text) or None when not found.
+    """
+    # Find candidate block starts: "(symbol" at depth 1.
+    depth = 0
+    i = 0
+    n = len(content)
+    in_string = False
+    escape = False
+    candidates: List[int] = []
+    while i < n:
+        ch = content[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == '"':
+                in_string = True
+            elif ch == "(":
+                if content.startswith("(symbol", i) and depth == 1:
+                    candidates.append(i)
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+        i += 1
+
+    ref_pat = re.compile(
+        r'\(property\s+"Reference"\s+"' + re.escape(reference) + r'"'
+    )
+    for start in candidates:
+        # Walk to the matching close paren of this block.
+        depth = 0
+        j = start
+        in_string = False
+        escape = False
+        while j < n:
+            ch = content[j]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+            else:
+                if ch == '"':
+                    in_string = True
+                elif ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+            j += 1
+        block = content[start : j + 1]
+        if "(lib_id" not in block:
+            continue
+        if ref_pat.search(block):
+            return start, j + 1, block
+    return None
+
+
+def move_symbol_in_schematic(
+    sch_path: str,
+    reference: str,
+    pos_x_mm: float,
+    pos_y_mm: float,
+    rotation: Optional[float] = None,
+) -> str:
+    """Move a symbol instance to new coordinates (rewrites its (at ...) line).
+
+    Returns the symbol uuid. Raises FileNotFoundError / ValueError.
+    """
+    with open(sch_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    found = _find_top_level_symbol_block(content, reference)
+    if found is None:
+        raise ValueError(f"Symbol '{reference}' not found in {sch_path}")
+    start, end, block = found
+
+    at_pat = re.compile(r"\(at\s+([0-9.\-]+)\s+([0-9.\-]+)(?:\s+([0-9.\-]+))?\)")
+    m = at_pat.search(block)
+    if m is None:
+        raise ValueError(f"Symbol '{reference}' has no (at ...) entry")
+
+    if rotation is None:
+        rot_text = m.group(3) if m.group(3) is not None else "0"
+    else:
+        rot_text = str(rotation)
+    new_at = f"(at {pos_x_mm} {pos_y_mm} {rot_text})"
+    new_block = block[: m.start()] + new_at + block[m.end() :]
+
+    uuid_m = re.search(r'\(uuid\s+"([^"]+)"', new_block)
+    sym_uuid = uuid_m.group(1) if uuid_m else ""
+
+    with open(sch_path, "w", encoding="utf-8") as f:
+        f.write(content[:start] + new_block + content[end:])
+
+    return sym_uuid
+
+
+def rotate_symbol_in_schematic(
+    sch_path: str,
+    reference: str,
+    angle: float,
+) -> str:
+    """Rotate a symbol instance in place (keeps its position)."""
+    with open(sch_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    found = _find_top_level_symbol_block(content, reference)
+    if found is None:
+        raise ValueError(f"Symbol '{reference}' not found in {sch_path}")
+    start, end, block = found
+
+    at_pat = re.compile(r"\(at\s+([0-9.\-]+)\s+([0-9.\-]+)(?:\s+([0-9.\-]+))?\)")
+    m = at_pat.search(block)
+    if m is None:
+        raise ValueError(f"Symbol '{reference}' has no (at ...) entry")
+
+    new_at = f"(at {m.group(1)} {m.group(2)} {angle})"
+    new_block = block[: m.start()] + new_at + block[m.end() :]
+
+    uuid_m = re.search(r'\(uuid\s+"([^"]+)"', new_block)
+    sym_uuid = uuid_m.group(1) if uuid_m else ""
+
+    with open(sch_path, "w", encoding="utf-8") as f:
+        f.write(content[:start] + new_block + content[end:])
+
+    return sym_uuid
+
+
+def delete_symbol_from_schematic(sch_path: str, reference: str) -> bool:
+    """Remove a whole top-level symbol instance block by Reference.
+
+    Returns True when a block was removed. Raises ValueError when missing.
+    """
+    with open(sch_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    found = _find_top_level_symbol_block(content, reference)
+    if found is None:
+        raise ValueError(f"Symbol '{reference}' not found in {sch_path}")
+    start, end, _block = found
+
+    # Drop the block plus one surrounding newline to avoid blank buildup.
+    head = content[:start].rstrip("\n") + "\n"
+    tail = content[end:].lstrip("\n")
+    new_content = head + tail
+    if not new_content.endswith("\n"):
+        new_content += "\n"
+
+    with open(sch_path, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    return True
+
+
 def extract_symbol_definition(sym_lib_path: str, symbol_name: str) -> str:
     """Extract a symbol definition block from a .kicad_sym file."""
     with open(sym_lib_path, "r", encoding="utf-8") as f:
