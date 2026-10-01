@@ -83,6 +83,13 @@ def uuid_of(block: list) -> str:
     return ""
 
 
+def at_rotation(block: list) -> float:
+    at = find_child(block, "at")
+    if at is None or len(at) < 4:
+        return 0.0
+    return to_float(at[3])
+
+
 def summarize_symbol(block: list) -> Dict[str, Any]:
     lib = find_child(block, "lib_id")
     x, y = at_xy(block)
@@ -93,6 +100,7 @@ def summarize_symbol(block: list) -> Dict[str, Any]:
         "lib_id": unquote(lib[1]) if lib is not None and len(lib) >= 2 else "",
         "x_mm": x,
         "y_mm": y,
+        "rotation": at_rotation(block),
     }
 
 
