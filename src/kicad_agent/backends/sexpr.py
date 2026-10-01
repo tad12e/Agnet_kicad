@@ -379,29 +379,56 @@ def add_symbol_to_schematic(
 
     sym_pins = ["1", "2"]
 
+    def _inject_lib_def(formatted_def: str) -> None:
+        nonlocal content
+        if has_lib_symbols:
+            idx = content.find("(lib_symbols")
+            if idx != -1:
+                insert_pos = idx + len("(lib_symbols")
+                content = content[:insert_pos] + "\n    " + formatted_def + content[insert_pos:]
+        else:
+            m_paper = re.search(r'\(paper\s+"[^"]+"\)', content)
+            if m_paper:
+                insert_pos = m_paper.end()
+                content = (
+                    content[:insert_pos]
+                    + f"\n  (lib_symbols\n    {formatted_def}\n  )"
+                    + content[insert_pos:]
+                )
+
     if not has_sym_in_lib and lib_name:
+        # Shared resolver (single source of truth with pin_geometry):
+        # parses the library, resolves `extends' aliases (LM358 -> LM2904)
+        # into a standalone definition, renames unit children, and takes
+        # the real unit-1 pin list.
+        from ..schematic.pin_geometry import resolve_lib_def
+
         symbols_dir = get_kicad_symbols_dir()
         lib_file = os.path.join(symbols_dir, f"{lib_name}.kicad_sym")
         if os.path.exists(lib_file):
+            resolved_ok = False
             try:
-                sym_def_str = extract_symbol_definition(lib_file, symbol_name)
-                formatted_def = re.sub(r'^\(symbol\s+"([^"]+)"', f'(symbol "{full_lib_id}"', sym_def_str.strip())
-                if has_lib_symbols:
-                    idx = content.find("(lib_symbols")
-                    if idx != -1:
-                        insert_pos = idx + len("(lib_symbols")
-                        content = content[:insert_pos] + "\n    " + formatted_def + content[insert_pos:]
-                else:
-                    m_paper = re.search(r'\(paper\s+"[^"]+"\)', content)
-                    if m_paper:
-                        insert_pos = m_paper.end()
-                        content = (
-                            content[:insert_pos]
-                            + f"\n  (lib_symbols\n    {formatted_def}\n  )"
-                            + content[insert_pos:]
-                        )
+                resolved, unit_pins = resolve_lib_def(lib_name, symbol_name, unit=1)
+                if resolved is not None:
+                    if unit_pins:
+                        sym_pins = unit_pins
+                    formatted_def = re.sub(
+                        r'^\(symbol\s+"([^"]+)"',
+                        f'(symbol "{full_lib_id}"',
+                        format_sexp(resolved, indent=4, indent_size=2).strip(),
+                    )
+                    _inject_lib_def(formatted_def)
+                    resolved_ok = True
             except Exception:
-                pass
+                resolved_ok = False
+            if not resolved_ok:
+                # Fallback: raw definition block (may reference `extends').
+                try:
+                    sym_def_str = extract_symbol_definition(lib_file, symbol_name)
+                    formatted_def = re.sub(r'^\(symbol\s+"([^"]+)"', f'(symbol "{full_lib_id}"', sym_def_str.strip())
+                    _inject_lib_def(formatted_def)
+                except Exception:
+                    pass
 
     pin_blocks = []
     for p in sym_pins:
