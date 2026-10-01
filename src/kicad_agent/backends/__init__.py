@@ -8,6 +8,7 @@ Provides unified execution interfaces across:
 
 from .base import KiCadBackend
 from .ipc import IPCBackend
+from .ipc_pcb import IPCPCBBackend
 from .pcbnew import PcbnewBackend
 from .sexpr import (
     KiCad10SchematicWriter,
@@ -26,6 +27,7 @@ from .sexpr import (
 
 __all__ = [
     "IPCBackend",
+    "IPCPCBBackend",
     "KiCad10SchematicWriter",
     "KiCadBackend",
     "PcbnewBackend",
