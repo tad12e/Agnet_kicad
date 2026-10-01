@@ -52,6 +52,15 @@ def run_all_tests():
             "test_symbol_resolver_search",
             "test_symbol_parser_string",
         ]),
+        ("tests.unit.schematic.test_pin_geometry", [
+            "test_rotate_point_ccw",
+            "test_clean_elbow_and_junction",
+            "test_dangling_end_is_error",
+            "test_three_way_meet_without_junction_is_error",
+            "test_duplicate_reference_is_error",
+            "test_unresolvable_library_warns_but_passes",
+            "test_device_r_pin_tips_when_library_present",
+        ]),
         ("tests.unit.ipc.test_ipc_messages", [
             "test_socket_discovery",
             "test_protobuf_envelope_roundtrip",
@@ -67,6 +76,12 @@ def run_all_tests():
             "test_drc_verifier",
             "test_connectivity_verifier",
             "test_geometry_verifier",
+        ]),
+        ("tests.unit.verification.test_schematic_connectivity", [
+            "test_passes_on_clean_text",
+            "test_fails_on_dangling_end",
+            "test_fails_without_text",
+            "test_fails_on_failed_action",
         ]),
         ("tests.unit.agent.test_agent", [
             "test_planner_request_generation",
