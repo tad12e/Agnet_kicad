@@ -1023,9 +1023,26 @@ class SexprBackend(KiCadBackend):
         elif domain == "schematic" and self.sch_filepath and os.path.exists(self.sch_filepath):
             with open(self.sch_filepath, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
-            sym_refs = re.findall(r'\(property\s+"Reference"\s+"([^"]+)"', content)
-            symbols = [{"ref": r, "reference": r} for r in sym_refs]
-            return {"symbols": symbols, "symbol_count": len(symbols), "file": self.sch_filepath}
+            try:
+                from ..schematic.sexpr_summary import summarize_schematic_text
+                summary = summarize_schematic_text(content)
+            except ValueError:
+                sym_refs = re.findall(r'\(property\s+"Reference"\s+"([^"]+)"', content)
+                symbols = [{"ref": r, "reference": r} for r in sym_refs]
+                return {"symbols": symbols, "symbol_count": len(symbols), "file": self.sch_filepath}
+            symbols = summary["symbols"]
+            for s in symbols:
+                s.setdefault("ref", s.get("reference", ""))
+            return {
+                "symbols": symbols,
+                "symbol_count": len(symbols),
+                "wires": summary["wires"],
+                "junctions": summary["junctions"],
+                "labels": summary["labels"],
+                "sheets": summary["sheets"],
+                "unknown_blocks": summary["unknown_blocks"],
+                "file": self.sch_filepath,
+            }
         return {}
 
     def execute(self, action: Action) -> ActionResult:
