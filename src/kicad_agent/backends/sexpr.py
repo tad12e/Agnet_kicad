@@ -1253,6 +1253,132 @@ class SexprBackend(KiCadBackend):
                     backend_used=self.name,
                 )
 
+            elif action.action_type == ActionType.ADD_JUNCTION:
+                if not self.sch_filepath:
+                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
+                pos = p.get("position", (p.get("x", 0.0), p.get("y", 0.0)))
+                junction_uuid = add_junction_to_schematic(
+                    sch_path=self.sch_filepath,
+                    pos_x_mm=float(pos[0]),
+                    pos_y_mm=float(pos[1]),
+                )
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"uuid": junction_uuid},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.ADD_LABEL:
+                if not self.sch_filepath:
+                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
+                pos = p.get("position", (p.get("x", 0.0), p.get("y", 0.0)))
+                label_uuid = add_label_to_schematic(
+                    sch_path=self.sch_filepath,
+                    text=str(p.get("text", "")),
+                    pos_x_mm=float(pos[0]),
+                    pos_y_mm=float(pos[1]),
+                    label_type=str(p.get("label_type", p.get("kind", "local"))),
+                    rotation=float(p.get("rotation", 0)),
+                )
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"uuid": label_uuid},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.ADD_BUS:
+                if not self.sch_filepath:
+                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
+                bus_uuid = add_bus_to_schematic(
+                    sch_path=self.sch_filepath,
+                    start=p["start"],
+                    end=p["end"],
+                )
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"uuid": bus_uuid},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.MOVE_SYMBOL:
+                if not self.sch_filepath:
+                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
+                ref = p.get("reference", p.get("ref", ""))
+                try:
+                    sym_uuid = move_symbol_in_schematic(
+                        sch_path=self.sch_filepath,
+                        reference=ref,
+                        pos_x_mm=float(p["x"]),
+                        pos_y_mm=float(p["y"]),
+                        rotation=p.get("rotation"),
+                    )
+                except ValueError as e:
+                    raise AgentError(
+                        category=ErrorCategory.MISSING_OBJECT,
+                        message=str(e),
+                        target_object=ref,
+                    ) from e
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"uuid": sym_uuid, "reference": ref},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.ROTATE_SYMBOL:
+                if not self.sch_filepath:
+                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
+                ref = p.get("reference", p.get("ref", ""))
+                try:
+                    sym_uuid = rotate_symbol_in_schematic(
+                        sch_path=self.sch_filepath,
+                        reference=ref,
+                        angle=float(p.get("angle", p.get("rotation", 90))),
+                    )
+                except ValueError as e:
+                    raise AgentError(
+                        category=ErrorCategory.MISSING_OBJECT,
+                        message=str(e),
+                        target_object=ref,
+                    ) from e
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"uuid": sym_uuid, "reference": ref},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.DELETE_SYMBOL:
+                if not self.sch_filepath:
+                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
+                ref = p.get("reference", p.get("ref", p.get("id", "")))
+                try:
+                    delete_symbol_from_schematic(
+                        sch_path=self.sch_filepath,
+                        reference=ref,
+                    )
+                except ValueError as e:
+                    raise AgentError(
+                        category=ErrorCategory.MISSING_OBJECT,
+                        message=str(e),
+                        target_object=ref,
+                    ) from e
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"reference": ref, "removed": True},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
             else:
                 raise AgentError(
                     category=ErrorCategory.INVALID_ACTION,
