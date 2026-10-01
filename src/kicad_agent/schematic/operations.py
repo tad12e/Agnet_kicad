@@ -62,6 +62,77 @@ class SchematicOperations:
         )
         return self.backend.execute(action)
 
+    def add_label(
+        self,
+        text: str,
+        x: float,
+        y: float,
+        label_type: str = "local",
+        rotation: float = 0,
+    ) -> ActionResult:
+        action = Action(
+            action_type=ActionType.ADD_LABEL,
+            domain=ActionDomain.SCHEMATIC,
+            parameters={
+                "text": text,
+                "x": x,
+                "y": y,
+                "label_type": label_type,
+                "rotation": rotation,
+            },
+            description=f"Add {label_type} label '{text}' at ({x}, {y})",
+        )
+        return self.backend.execute(action)
+
+    def add_bus(
+        self,
+        start: Tuple[float, float],
+        end: Tuple[float, float],
+    ) -> ActionResult:
+        action = Action(
+            action_type=ActionType.ADD_BUS,
+            domain=ActionDomain.SCHEMATIC,
+            parameters={"start": start, "end": end},
+            description=f"Add bus {start} -> {end}",
+        )
+        return self.backend.execute(action)
+
+    def move_symbol(
+        self,
+        reference: str,
+        x: float,
+        y: float,
+        rotation: Optional[float] = None,
+    ) -> ActionResult:
+        params: Dict[str, Any] = {"reference": reference, "x": x, "y": y}
+        if rotation is not None:
+            params["rotation"] = rotation
+        action = Action(
+            action_type=ActionType.MOVE_SYMBOL,
+            domain=ActionDomain.SCHEMATIC,
+            parameters=params,
+            description=f"Move symbol {reference} to ({x}, {y})",
+        )
+        return self.backend.execute(action)
+
+    def rotate_symbol(self, reference: str, angle: float = 90) -> ActionResult:
+        action = Action(
+            action_type=ActionType.ROTATE_SYMBOL,
+            domain=ActionDomain.SCHEMATIC,
+            parameters={"reference": reference, "angle": angle},
+            description=f"Rotate symbol {reference} by {angle} deg",
+        )
+        return self.backend.execute(action)
+
+    def delete_symbol(self, reference: str) -> ActionResult:
+        action = Action(
+            action_type=ActionType.DELETE_SYMBOL,
+            domain=ActionDomain.SCHEMATIC,
+            parameters={"reference": reference},
+            description=f"Delete symbol {reference}",
+        )
+        return self.backend.execute(action)
+
 
 class ComponentManager:
     """Manager for schematic components/symbols delegating to backend/operations."""
