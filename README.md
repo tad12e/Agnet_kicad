@@ -220,6 +220,43 @@ print("Result:", result["success"])
 
 ---
 
+## 🔌 IPC Schematic Lane (live KiCad + automatic file fallback)
+
+Scope rule: **pcbnew owns PCB; IPC serves schematics; S-expression is the fallback.** `IPCBackend` is schematic-only and refuses PCB actions and file load/save with explicit errors.
+
+Prerequisites (KiCad 9/10 require a live GUI; headless needs KiCad 11+):
+
+1. Exactly **one** KiCad instance (a zombie `kicad.exe` keeps `api.sock` while the visible one moves to a PID-suffixed pipe — the probe reports process counts).
+2. Project open with the **schematic editor** window open (no open frame → `AS_UNHANDLED`, reported honestly, never phantom docs).
+3. **Preferences → Plugins → Enable KiCad API** ticked.
+
+```powershell
+python scripts/diagnostic_ipc.py   # read-only probe: env, socket, docs, kipy health
+```
+
+Failover composition (L4) — schematic writes try live IPC commits, then fall back to a file-targeted `SexprBackend` (results carry `backend_used: "ipc->sexpr"` and `fallback_used: true`):
+
+```python
+from kicad_agent.agent import KiCadAgent
+from kicad_agent.backends.ipc import IPCBackend
+from kicad_agent.backends.sexpr import SexprBackend
+
+agent = KiCadAgent(
+    backend=IPCBackend(),
+    fallback=SexprBackend(sch_filepath="scratch.kicad_sch"),
+)
+result = agent.run("place resistor R99 (10k) at (100, 100)", domain="schematic")
+# or via CLI: main.py --backend ipc --fallback-file scratch.kicad_sch "..."
+```
+
+Known limits on KiCad 10.0.4 (live-verified): schematic `BeginCommit` is refused (`AS_NOT_READY`, wedges the server until restart), so writes effectively go through the fallback; `kicad-python`'s schematic wrappers are broken upstream (board side works). Capability flags live in `kicad_agent.kicad.capabilities.KiCadCapabilities`. Optional official client (install order matters — its metadata caps `protobuf<6` while our vendored protos need `>=7.35.1`):
+
+```powershell
+pip install "kicad-python==0.8.0" && pip install "protobuf>=7.35.1"
+```
+
+---
+
 ## 🛡️ Key Architectural Principles
 
 1. **Deterministic Execution**: The AI planner generates structured `Action` IR objects rather than executing arbitrary code on the canvas.

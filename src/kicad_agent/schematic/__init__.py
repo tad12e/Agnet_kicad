@@ -9,6 +9,7 @@ from .labels import Label, LabelManager
 from .operations import ComponentManager, SchematicOperations
 from .schematic import Schematic, SchematicAPI
 from .state import SchematicState
+from .sexpr_summary import summarize_schematic_text
 from .symbols import (
     Component,
     Pin,
@@ -35,6 +36,7 @@ __all__ = [
     "SchematicOperations",
     "SchematicState",
     "SymbolInfo",
+    "summarize_schematic_text",
     "SymbolLibraryParser",
     "SymbolResolver",
     "Wire",

@@ -56,6 +56,61 @@ class ItemStatusCode:
     ISC_INVALID_DATA = 7
 
 
+class ItemRequestStatus:
+    """Matches kiapi.common.types.ItemRequestStatus in base_types.proto."""
+    IRS_UNKNOWN = 0
+    IRS_OK = 1
+    IRS_DOCUMENT_NOT_FOUND = 2
+    IRS_FIELD_MASK_INVALID = 3
+
+
+class CommitAction:
+    """Matches kiapi.common.commands.CommitAction in editor_commands.proto."""
+    CMA_UNKNOWN = 0
+    CMA_COMMIT = 1
+    CMA_DROP = 2
+
+
+class ItemDeletionStatus:
+    """Matches kiapi.common.commands.ItemDeletionStatus in editor_commands.proto."""
+    IDS_UNKNOWN = 0
+    IDS_OK = 1
+    IDS_NONEXISTENT = 2
+    IDS_IMMUTABLE = 3
+
+
+class KiCadObjectType:
+    """Subset of kiapi.common.types.KiCadObjectType (enums.proto) used here."""
+    KOT_UNKNOWN = 0
+    KOT_SCH_MARKER = 18
+    KOT_SCH_JUNCTION = 19
+    KOT_SCH_NO_CONNECT = 20
+    KOT_SCH_BUS_WIRE_ENTRY = 21
+    KOT_SCH_BUS_BUS_ENTRY = 22
+    KOT_SCH_LINE = 23
+    KOT_SCH_LABEL = 30
+    KOT_SCH_GLOBAL_LABEL = 31
+    KOT_SCH_HIER_LABEL = 32
+    KOT_SCH_DIRECTIVE_LABEL = 33
+    KOT_SCH_SYMBOL = 35
+    KOT_SCH_SHEET = 37
+    KOT_SCH_PIN = 38
+    KOT_SCH_GROUP = 51
+
+
+# Schematic item types listed by a single GetItems read. NOTE: pass explicit
+# types always — an empty filter is an error on KiCad < 10.0.7.
+SCHEMATIC_ITEM_TYPES = (
+    KiCadObjectType.KOT_SCH_SYMBOL,
+    KiCadObjectType.KOT_SCH_LINE,
+    KiCadObjectType.KOT_SCH_JUNCTION,
+    KiCadObjectType.KOT_SCH_LABEL,
+    KiCadObjectType.KOT_SCH_GLOBAL_LABEL,
+    KiCadObjectType.KOT_SCH_HIER_LABEL,
+    KiCadObjectType.KOT_SCH_DIRECTIVE_LABEL,
+)
+
+
 def get_envelope_protos():
     """Import and return the ApiRequest/ApiResponse envelope classes."""
     try:
@@ -93,6 +148,122 @@ def get_editor_command_protos():
         except ImportError as e:
             raise ImportError(
                 "KiCad protobuf bindings not found. Ensure proto/ directory or kipy is installed."
+            ) from e
+
+
+def get_commit_protos():
+    """Import and return the commit lifecycle protobuf classes (Part 4).
+
+    Returns (BeginCommit, BeginCommitResponse, EndCommit, EndCommitResponse).
+    Use CommitAction (this module) for the EndCommit action field.
+    """
+    try:
+        from common.commands.editor_commands_pb2 import (
+            BeginCommit,
+            BeginCommitResponse,
+            EndCommit,
+            EndCommitResponse,
+        )
+        return BeginCommit, BeginCommitResponse, EndCommit, EndCommitResponse
+    except ImportError:
+        try:
+            from kipy.proto.common.commands.editor_commands_pb2 import (
+                BeginCommit,
+                BeginCommitResponse,
+                EndCommit,
+                EndCommitResponse,
+            )
+            return BeginCommit, BeginCommitResponse, EndCommit, EndCommitResponse
+        except ImportError as e:
+            raise ImportError(
+                "KiCad commit protos not found. Ensure proto/ directory or kipy is installed."
+            ) from e
+
+
+def get_item_mutation_protos():
+    """Import and return Get/Update/Delete item protobuf classes (Part 4+).
+
+    Returns (GetItems, GetItemsResponse, UpdateItems, UpdateItemsResponse,
+    DeleteItems, DeleteItemsResponse).
+    """
+    try:
+        from common.commands.editor_commands_pb2 import (
+            GetItems,
+            GetItemsResponse,
+            UpdateItems,
+            UpdateItemsResponse,
+            DeleteItems,
+            DeleteItemsResponse,
+        )
+        return (
+            GetItems,
+            GetItemsResponse,
+            UpdateItems,
+            UpdateItemsResponse,
+            DeleteItems,
+            DeleteItemsResponse,
+        )
+    except ImportError:
+        try:
+            from kipy.proto.common.commands.editor_commands_pb2 import (
+                GetItems,
+                GetItemsResponse,
+                UpdateItems,
+                UpdateItemsResponse,
+                DeleteItems,
+                DeleteItemsResponse,
+            )
+            return (
+                GetItems,
+                GetItemsResponse,
+                UpdateItems,
+                UpdateItemsResponse,
+                DeleteItems,
+                DeleteItemsResponse,
+            )
+        except ImportError as e:
+            raise ImportError(
+                "KiCad item mutation protos not found. Ensure proto/ directory or kipy is installed."
+            ) from e
+
+
+def get_item_by_id_protos():
+    """Import GetItemsById (response type is GetItemsResponse) (Part 7)."""
+    try:
+        from common.commands.editor_commands_pb2 import GetItemsById
+
+        return (GetItemsById,)
+    except ImportError:
+        try:
+            from kipy.proto.common.commands.editor_commands_pb2 import GetItemsById
+
+            return (GetItemsById,)
+        except ImportError as e:
+            raise ImportError(
+                "GetItemsById proto not found. Ensure proto/ directory or kipy is installed."
+            ) from e
+
+
+def get_document_text_protos():
+    """Import SaveDocumentToString/SavedDocumentResponse (cascade Step 1)."""
+    try:
+        from common.commands.editor_commands_pb2 import (
+            SaveDocumentToString,
+            SavedDocumentResponse,
+        )
+
+        return SaveDocumentToString, SavedDocumentResponse
+    except ImportError:
+        try:
+            from kipy.proto.common.commands.editor_commands_pb2 import (
+                SaveDocumentToString,
+                SavedDocumentResponse,
+            )
+
+            return SaveDocumentToString, SavedDocumentResponse
+        except ImportError as e:
+            raise ImportError(
+                "Document-text protos not found. Ensure proto/ directory or kipy is installed."
             ) from e
 
 

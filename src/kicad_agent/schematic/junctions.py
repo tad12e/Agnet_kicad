@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from typing import TYPE_CHECKING, Optional, Tuple
 
@@ -32,4 +33,12 @@ class JunctionManager:
 
     def add(self, position_mm: Tuple[float, float]) -> Junction:
         """Place a junction dot at the given coordinates."""
-        return Junction(position_mm=position_mm)
+        from ..backends.sexpr import add_junction_to_schematic
+        sch_path = self.schematic.filepath
+        if sch_path and os.path.exists(sch_path):
+            junction_id = add_junction_to_schematic(
+                sch_path, position_mm[0], position_mm[1]
+            )
+            return Junction(position_mm=position_mm, id=junction_id)
+        else:
+            return Junction(position_mm=position_mm)

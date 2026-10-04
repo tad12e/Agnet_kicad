@@ -14,6 +14,7 @@ from ..verification.geometry import GeometryVerifier
 from ..verification.intent import IntentVerifier
 from ..verification.placement import PlacementVerifier
 from ..verification.routing import RoutingVerifier
+from ..verification.schematic_connectivity import SchematicConnectivityVerifier
 from ..verification.structural import StructuralVerifier
 
 
@@ -29,6 +30,7 @@ class AgentVerifier:
             "drc": DRCVerifier(),
             "intent": IntentVerifier(),
             "structural": StructuralVerifier(),
+            "schematic_connectivity": SchematicConnectivityVerifier(),
         }
 
     def verify_action(
@@ -45,7 +47,15 @@ class AgentVerifier:
                 message=f"Action execution failed: {result.error}",
             )
 
+        from ..core.actions import ActionDomain
+
         t = action.action_type
+        if action.domain == ActionDomain.SCHEMATIC and t in (
+            ActionType.ADD_WIRE, ActionType.ADD_BUS, ActionType.ADD_JUNCTION,
+            ActionType.ADD_LABEL, ActionType.VERIFY_CONNECTIVITY,
+            ActionType.CHECK_CONNECTIVITY,
+        ):
+            return self.verifiers["schematic_connectivity"].verify(action, result, expected=expected)
         if t in (ActionType.ADD_FOOTPRINT, ActionType.MOVE_FOOTPRINT, ActionType.ROTATE_FOOTPRINT, ActionType.REMOVE_FOOTPRINT, ActionType.ADD_SYMBOL):
             return self.verifiers["placement"].verify(action, result, expected=expected)
         elif t in (ActionType.ADD_TRACK, ActionType.ROUTE_TRACK, ActionType.ADD_VIA, ActionType.ADD_WIRE):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from typing import TYPE_CHECKING, List, Tuple
 
@@ -35,4 +36,10 @@ class BusManager:
         self.schematic = schematic
 
     def add(self, name: str, start_mm: Tuple[float, float], end_mm: Tuple[float, float]) -> Bus:
-        return Bus(name=name, start_mm=start_mm, end_mm=end_mm)
+        from ..backends.sexpr import add_bus_to_schematic
+        sch_path = self.schematic.filepath
+        if sch_path and os.path.exists(sch_path):
+            bus_id = add_bus_to_schematic(sch_path, start_mm, end_mm)
+            return Bus(name=name, start_mm=start_mm, end_mm=end_mm, id=bus_id)
+        else:
+            return Bus(name=name, start_mm=start_mm, end_mm=end_mm)

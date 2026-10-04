@@ -226,7 +226,157 @@ WRITE_TOOLS_SCHEMA: List[Dict[str, Any]] = [
     },
 ]
 
-ALL_TOOLS_SCHEMA = READ_TOOLS_SCHEMA + WRITE_TOOLS_SCHEMA
+SCHEMATIC_READ_SCHEMA: List[Dict[str, Any]] = [
+    {
+        "name": "get_schematic_state",
+        "description": "Inspect the active schematic: symbols (with position and rotation), wires, junctions, labels, sheets, and file path.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "get_symbol_pins",
+        "description": "Pin truth for a symbol: the exact coordinates wires connect to. With 'reference', returns pin tips for a placed symbol (accounts for its position and rotation); with only 'lib_id', returns library pins at the origin. Coordinates are in mm.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "lib_id": {"type": "string", "description": "Library id like 'Device:R' or 'Amplifier_Operational:LM358' (optional when 'reference' is given)"},
+                "reference": {"type": "string", "description": "Placed reference designator like 'R1' (requires an open schematic)"},
+            },
+        },
+    },
+    {
+        "name": "search_symbols",
+        "description": "Search KiCad symbol libraries by name, keywords, or description (e.g. 'opamp', 'resistor'). Returns lib_ids usable with add_symbol.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Free-text search query"},
+                "family": {"type": "string", "description": "Optional library family filter like 'Device'"},
+                "limit": {"type": "integer", "description": "Maximum results to return (default 20)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "verify_schematic_connectivity",
+        "description": "Check the active schematic's wiring: dangling wire ends and junction-less meets are errors; unconnected pins are warnings.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+]
+
+SCHEMATIC_WRITE_SCHEMA: List[Dict[str, Any]] = [
+    {
+        "name": "add_symbol",
+        "description": "Place a symbol (component) on the active schematic at (x, y). The library definition is embedded automatically. Coordinates in mm.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "lib_id": {"type": "string", "description": "Library id like 'Device:R', 'Device:C', 'Amplifier_Operational:LM358'"},
+                "reference": {"type": "string", "description": "Reference designator (e.g. 'R1', 'C1', 'U1') - must be unique"},
+                "value": {"type": "string", "description": "Component value (e.g. '10k', '100nF', 'LM358')"},
+                "x": {"type": "number", "description": "X position in mm"},
+                "y": {"type": "number", "description": "Y position in mm"},
+                "rotation": {"type": "number", "description": "Rotation in degrees counter-clockwise (default 0)"},
+            },
+            "required": ["lib_id", "reference", "x", "y"],
+        },
+    },
+    {
+        "name": "add_wire",
+        "description": "Draw a wire segment on the active schematic between two points. Endpoints must land on a pin tip, junction, label, or another wire end.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start": {"type": "array", "items": {"type": "number"}, "description": "[x, y] start point in mm"},
+                "end": {"type": "array", "items": {"type": "number"}, "description": "[x, y] end point in mm"},
+            },
+            "required": ["start", "end"],
+        },
+    },
+    {
+        "name": "add_junction",
+        "description": "Place a junction dot on the active schematic where three or more wires meet.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "number", "description": "X position in mm"},
+                "y": {"type": "number", "description": "Y position in mm"},
+            },
+            "required": ["x", "y"],
+        },
+    },
+    {
+        "name": "add_label",
+        "description": "Attach a net label to the active schematic (names the electrical net at that point). Coordinates in mm.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Label text / net name (e.g. 'OUT', 'VCC')"},
+                "x": {"type": "number", "description": "X position in mm (must sit on a wire or pin)"},
+                "y": {"type": "number", "description": "Y position in mm"},
+                "label_type": {"type": "string", "description": "'local' (default), 'global', or 'hierarchical'"},
+                "rotation": {"type": "number", "description": "Label rotation in degrees (default 0)"},
+            },
+            "required": ["text", "x", "y"],
+        },
+    },
+    {
+        "name": "add_bus",
+        "description": "Draw a bus segment (thick multi-net line) on the active schematic between two points. Coordinates in mm.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start": {"type": "array", "items": {"type": "number"}, "description": "[x, y] start point in mm"},
+                "end": {"type": "array", "items": {"type": "number"}, "description": "[x, y] end point in mm"},
+            },
+            "required": ["start", "end"],
+        },
+    },
+    {
+        "name": "move_symbol",
+        "description": "Move a placed symbol on the active schematic to new coordinates. Coordinates in mm.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reference": {"type": "string", "description": "Reference designator of the placed symbol (e.g. 'R1')"},
+                "x": {"type": "number", "description": "New X position in mm"},
+                "y": {"type": "number", "description": "New Y position in mm"},
+                "rotation": {"type": "number", "description": "Optional new rotation in degrees (keeps current rotation when omitted)"},
+            },
+            "required": ["reference", "x", "y"],
+        },
+    },
+    {
+        "name": "rotate_symbol",
+        "description": "Rotate a placed symbol in place on the active schematic.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reference": {"type": "string", "description": "Reference designator of the placed symbol (e.g. 'R1')"},
+                "angle": {"type": "number", "description": "New rotation angle in degrees (e.g. 90, 180, 270)"},
+            },
+            "required": ["reference", "angle"],
+        },
+    },
+    {
+        "name": "delete_symbol",
+        "description": "Delete a placed symbol from the active schematic.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reference": {"type": "string", "description": "Reference designator of the symbol to remove (e.g. 'R1')"},
+            },
+            "required": ["reference"],
+        },
+    },
+]
+
+ALL_TOOLS_SCHEMA = READ_TOOLS_SCHEMA + WRITE_TOOLS_SCHEMA + SCHEMATIC_READ_SCHEMA + SCHEMATIC_WRITE_SCHEMA
 
 
 # ===========================================================================
@@ -277,6 +427,91 @@ class ToolRegistry:
             act = Action(action_type=ActionType.RUN_DRC, domain=ActionDomain.PCB)
             res = self.backend.execute(act)
             return {"status": "success" if res.success else "error", "drc": res.data, "error": str(res.error) if res.error else None}
+
+        # Schematic read tools
+        elif tool_name == "get_schematic_state":
+            state = self.backend.get_state("schematic")
+            if not state:
+                return {"status": "error", "message": "No schematic file open"}
+            return {"status": "success", "schematic": state}
+
+        elif tool_name == "get_symbol_pins":
+            from ..schematic.pin_geometry import resolve_pin_tips
+
+            ref = str(arguments.get("reference", "") or "")
+            lib_id = str(arguments.get("lib_id", "") or "")
+            if ref:
+                state = self.backend.get_state("schematic")
+                sym = next(
+                    (s for s in state.get("symbols", [])
+                     if s.get("reference") == ref),
+                    None,
+                )
+                if sym is None:
+                    return {"status": "error", "message": f"Symbol '{ref}' not found in active schematic"}
+                lib_id = lib_id or str(sym.get("lib_id", ""))
+                tips = resolve_pin_tips(
+                    lib_id,
+                    float(sym.get("x_mm", 0.0)),
+                    float(sym.get("y_mm", 0.0)),
+                    float(sym.get("rotation", 0.0)),
+                )
+            elif lib_id:
+                tips = resolve_pin_tips(lib_id, 0.0, 0.0, 0.0)
+            else:
+                return {"status": "error", "message": "Provide 'lib_id' or 'reference'"}
+            if tips is None:
+                return {"status": "error", "message": f"Could not resolve pins for '{lib_id or ref}': library not installed or unparsable"}
+            pins = [
+                {"number": num, "x": pos[0], "y": pos[1]}
+                for num, pos in sorted(tips.items())
+            ]
+            return {"status": "success", "lib_id": lib_id, "reference": ref, "pins": pins}
+
+        elif tool_name == "search_symbols":
+            from ..schematic.symbols import SymbolResolver
+
+            resolver = SymbolResolver.get_default()
+            results = resolver.search(
+                str(arguments.get("query", "")),
+                family=arguments.get("family"),
+            )
+            limit = int(arguments.get("limit", 20) or 20)
+            symbols = []
+            for info in results[:limit]:
+                symbols.append({
+                    "lib_id": info.lib_id,
+                    "name": info.name,
+                    "library": info.library,
+                    "description": info.description,
+                    "pin_count": info.pin_count,
+                    "pins": [
+                        {"number": p.number, "name": p.name, "type": p.pin_type}
+                        for p in info.pins
+                    ],
+                })
+            return {"status": "success", "count": len(symbols), "symbols": symbols}
+
+        elif tool_name == "verify_schematic_connectivity":
+            from ..schematic.pin_geometry import endpoint_report
+
+            state = self.backend.get_state("schematic")
+            path = state.get("file") if isinstance(state, dict) else None
+            if not path:
+                return {"status": "error", "message": "No schematic file open"}
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    text = f.read()
+            except OSError as e:
+                return {"status": "error", "message": f"Cannot read schematic: {e}"}
+            report = endpoint_report(text)
+            return {
+                "status": "success",
+                "connected": not report["errors"],
+                "errors": report["errors"],
+                "warnings": report["warnings"],
+                "stats": report["stats"],
+            }
 
         # Write tools
         elif tool_name == "create_board":
@@ -331,6 +566,47 @@ class ToolRegistry:
 
         elif tool_name == "create_board_outline":
             act = Action(action_type=ActionType.CREATE_BOARD_OUTLINE, domain=ActionDomain.PCB, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        # Schematic write tools
+        elif tool_name == "add_symbol":
+            act = Action(action_type=ActionType.ADD_SYMBOL, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "add_wire":
+            act = Action(action_type=ActionType.ADD_WIRE, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "add_junction":
+            act = Action(action_type=ActionType.ADD_JUNCTION, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "add_label":
+            act = Action(action_type=ActionType.ADD_LABEL, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "add_bus":
+            act = Action(action_type=ActionType.ADD_BUS, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "move_symbol":
+            act = Action(action_type=ActionType.MOVE_SYMBOL, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "rotate_symbol":
+            act = Action(action_type=ActionType.ROTATE_SYMBOL, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "delete_symbol":
+            act = Action(action_type=ActionType.DELETE_SYMBOL, domain=ActionDomain.SCHEMATIC, parameters=arguments)
             res = self.backend.execute(act)
             return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
 

@@ -1,6 +1,16 @@
 anthropic>=0.18.0
+mcp>=1.0.0,<2.0.0
 pynng>=0.7.0
-protobuf>=4.21.0
+# Our vendored _pb2 files are gencode 7.35.1 -> runtime must be >=7.35.1.
+protobuf>=7.35.1
+# kicad-python is intentionally NOT pinned here: all published versions cap
+# protobuf<6, which contradicts the floor above and makes `pip install -r`
+# unresolvable. Install it manually AFTER everything else, then re-upgrade
+# protobuf (verified working combo, see scripts/diagnostic_ipc.py):
+#   pip install "kicad-python==0.8.0" && pip install "protobuf>=7.35.1"
+# (Permanent fix = regenerate vendored _pb2 with 5.x gencode; tracked as a
+# later IPC part. Until then the probe + KipySession degrade gracefully when
+# kipy is absent.)
 pydantic>=2.0.0
 pytest>=7.0.0
 pyspice

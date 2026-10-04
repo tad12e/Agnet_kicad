@@ -10,6 +10,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from ..backends.base import KiCadBackend
+from ..backends.ipc import IPCBackend
 from ..backends.pcbnew import PcbnewBackend
 from ..backends.sexpr import SexprBackend
 from ..core.actions import Action, ActionType
@@ -39,6 +40,7 @@ class KiCadAgent:
         verifier: Optional[AgentVerifier] = None,
         repair_engine: Optional[RepairEngine] = None,
         max_retries: int = 3,
+        fallback: Optional[KiCadBackend] = None,
     ):
         # Default to PcbnewBackend if available, else SexprBackend fallback
         if backend is None:
@@ -46,6 +48,14 @@ class KiCadAgent:
             self.backend = pcb_be if pcb_be.is_available() else SexprBackend()
         else:
             self.backend = backend
+
+        # Part 9 (L4): an IPCBackend without its own fallback adopts the
+        # agent-level one, so schematic actions fail over instead of dying
+        # on refused live commits. No file is ever guessed: the caller must
+        # supply a file-targeted fallback (e.g. SexprBackend(sch_filepath)).
+        if (fallback is not None and isinstance(self.backend, IPCBackend)
+                and self.backend.fallback is None):
+            self.backend.fallback = fallback
 
         self.planner = planner or Planner()
         self.executor = executor or Executor(self.backend)
@@ -145,7 +155,18 @@ class KiCadAgent:
                     trace.metrics["actions_failed"] += 1
                     trace.metrics["retries"] += 1
 
-                    # Step 6: ANALYZE ERROR & REPAIR
+                    # Step 6: ANALYZE ERROR & REPAIR (Part 9: ErrorAnalyzer
+                    # categorizes verification-only failures so repair rules
+                    # see a structured error instead of None).
+                    if (result is not None and result.error is None
+                            and verification is not None
+                            and not verification.passed):
+                        result.error = ErrorAnalyzer.analyze(
+                            Exception(verification.message or "verification failed"),
+                            operation=current_action.action_type.value,
+                        )
+                        trace.record("ERROR_ANALYZED",
+                                     f"{result.error.category.value}: {result.error.message}")
                     if attempt < self.max_retries:
                         trace.metrics["repairs_attempted"] += 1
                         repaired = self.repair_engine.attempt_repair(current_action, result, verification, attempt=attempt)
@@ -173,8 +194,11 @@ class KiCadAgent:
             transaction.commit()
             trace.record("TRANSACTION_COMMITTED", "All actions verified, transaction committed")
             if auto_save:
-                self.backend.save_board()
-                trace.record("BOARD_SAVED", "Board saved successfully")
+                try:
+                    self.backend.save_board()
+                    trace.record("BOARD_SAVED", "Board saved successfully")
+                except Exception as e:
+                    trace.record("BOARD_SAVE_FAILED", f"Auto-save failed: {e}")
         else:
             transaction.rollback()
             trace.record("TRANSACTION_ROLLED_BACK", "Transaction rolled back due to verification failure")
