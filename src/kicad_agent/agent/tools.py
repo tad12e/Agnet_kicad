@@ -569,6 +569,46 @@ class ToolRegistry:
             res = self.backend.execute(act)
             return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
 
+        # Schematic write tools
+        elif tool_name == "add_symbol":
+            act = Action(action_type=ActionType.ADD_SYMBOL, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "add_wire":
+            act = Action(action_type=ActionType.ADD_WIRE, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "add_junction":
+            act = Action(action_type=ActionType.ADD_JUNCTION, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "add_label":
+            act = Action(action_type=ActionType.ADD_LABEL, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "add_bus":
+            act = Action(action_type=ActionType.ADD_BUS, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "move_symbol":
+            act = Action(action_type=ActionType.MOVE_SYMBOL, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "rotate_symbol":
+            act = Action(action_type=ActionType.ROTATE_SYMBOL, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
+        elif tool_name == "delete_symbol":
+            act = Action(action_type=ActionType.DELETE_SYMBOL, domain=ActionDomain.SCHEMATIC, parameters=arguments)
+            res = self.backend.execute(act)
+            return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
 
         else:
             return {"status": "error", "message": f"Unknown tool '{tool_name}'"}
