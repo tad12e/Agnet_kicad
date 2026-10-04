@@ -83,6 +83,14 @@ def run_all_tests():
             "test_fails_without_text",
             "test_fails_on_failed_action",
         ]),
+        ("tests.unit.mcp.test_mcp_server", [
+            "test_mcp_tool_schemas_complete",
+            "test_mcp_session_info",
+            "test_mcp_no_document_errors",
+            "test_mcp_open_and_label_roundtrip",
+            "test_mcp_tier2_guards",
+            "test_mcp_unknown_tool",
+        ]),
         ("tests.unit.agent.test_agent", [
             "test_planner_request_generation",
             "test_planner_multi_component_creation",
