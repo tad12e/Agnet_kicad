@@ -269,7 +269,114 @@ SCHEMATIC_READ_SCHEMA: List[Dict[str, Any]] = [
     },
 ]
 
-ALL_TOOLS_SCHEMA = READ_TOOLS_SCHEMA + WRITE_TOOLS_SCHEMA
+SCHEMATIC_WRITE_SCHEMA: List[Dict[str, Any]] = [
+    {
+        "name": "add_symbol",
+        "description": "Place a symbol (component) on the active schematic at (x, y). The library definition is embedded automatically. Coordinates in mm.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "lib_id": {"type": "string", "description": "Library id like 'Device:R', 'Device:C', 'Amplifier_Operational:LM358'"},
+                "reference": {"type": "string", "description": "Reference designator (e.g. 'R1', 'C1', 'U1') - must be unique"},
+                "value": {"type": "string", "description": "Component value (e.g. '10k', '100nF', 'LM358')"},
+                "x": {"type": "number", "description": "X position in mm"},
+                "y": {"type": "number", "description": "Y position in mm"},
+                "rotation": {"type": "number", "description": "Rotation in degrees counter-clockwise (default 0)"},
+            },
+            "required": ["lib_id", "reference", "x", "y"],
+        },
+    },
+    {
+        "name": "add_wire",
+        "description": "Draw a wire segment on the active schematic between two points. Endpoints must land on a pin tip, junction, label, or another wire end.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start": {"type": "array", "items": {"type": "number"}, "description": "[x, y] start point in mm"},
+                "end": {"type": "array", "items": {"type": "number"}, "description": "[x, y] end point in mm"},
+            },
+            "required": ["start", "end"],
+        },
+    },
+    {
+        "name": "add_junction",
+        "description": "Place a junction dot on the active schematic where three or more wires meet.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "number", "description": "X position in mm"},
+                "y": {"type": "number", "description": "Y position in mm"},
+            },
+            "required": ["x", "y"],
+        },
+    },
+    {
+        "name": "add_label",
+        "description": "Attach a net label to the active schematic (names the electrical net at that point). Coordinates in mm.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Label text / net name (e.g. 'OUT', 'VCC')"},
+                "x": {"type": "number", "description": "X position in mm (must sit on a wire or pin)"},
+                "y": {"type": "number", "description": "Y position in mm"},
+                "label_type": {"type": "string", "description": "'local' (default), 'global', or 'hierarchical'"},
+                "rotation": {"type": "number", "description": "Label rotation in degrees (default 0)"},
+            },
+            "required": ["text", "x", "y"],
+        },
+    },
+    {
+        "name": "add_bus",
+        "description": "Draw a bus segment (thick multi-net line) on the active schematic between two points. Coordinates in mm.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start": {"type": "array", "items": {"type": "number"}, "description": "[x, y] start point in mm"},
+                "end": {"type": "array", "items": {"type": "number"}, "description": "[x, y] end point in mm"},
+            },
+            "required": ["start", "end"],
+        },
+    },
+    {
+        "name": "move_symbol",
+        "description": "Move a placed symbol on the active schematic to new coordinates. Coordinates in mm.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reference": {"type": "string", "description": "Reference designator of the placed symbol (e.g. 'R1')"},
+                "x": {"type": "number", "description": "New X position in mm"},
+                "y": {"type": "number", "description": "New Y position in mm"},
+                "rotation": {"type": "number", "description": "Optional new rotation in degrees (keeps current rotation when omitted)"},
+            },
+            "required": ["reference", "x", "y"],
+        },
+    },
+    {
+        "name": "rotate_symbol",
+        "description": "Rotate a placed symbol in place on the active schematic.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reference": {"type": "string", "description": "Reference designator of the placed symbol (e.g. 'R1')"},
+                "angle": {"type": "number", "description": "New rotation angle in degrees (e.g. 90, 180, 270)"},
+            },
+            "required": ["reference", "angle"],
+        },
+    },
+    {
+        "name": "delete_symbol",
+        "description": "Delete a placed symbol from the active schematic.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reference": {"type": "string", "description": "Reference designator of the symbol to remove (e.g. 'R1')"},
+            },
+            "required": ["reference"],
+        },
+    },
+]
+
+ALL_TOOLS_SCHEMA = READ_TOOLS_SCHEMA + WRITE_TOOLS_SCHEMA + SCHEMATIC_READ_SCHEMA + SCHEMATIC_WRITE_SCHEMA + SCHEMATIC_READ_SCHEMA + SCHEMATIC_WRITE_SCHEMA
 
 
 # ===========================================================================
