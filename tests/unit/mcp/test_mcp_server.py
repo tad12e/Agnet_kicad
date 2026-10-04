@@ -69,3 +69,62 @@ def test_mcp_no_document_errors():
     out = session.dispatch("open_schematic", {})
     assert out["status"] == "error"
     assert out["code"] == "MISSING_ARGUMENT"
+
+
+def test_mcp_open_and_label_roundtrip(sample_sch_file, tmp_path):
+    scratch = os.path.join(tmp_path, "scratch.kicad_sch")
+    shutil.copyfile(sample_sch_file, scratch)
+    session = _fresh_session()
+
+    opened = session.dispatch("open_schematic", {"path": scratch})
+    assert opened["status"] == "success"
+    assert opened["file"] == os.path.abspath(scratch)
+
+    added = session.dispatch(
+        "add_label", {"text": "NET1", "x": 10.0, "y": 20.0})
+    assert added["status"] == "success"
+    assert added["data"]["uuid"]
+
+    state = session.dispatch("get_schematic_state", {})
+    assert state["status"] == "success"
+    labels = state["schematic"]["labels"]
+    assert any(label.get("text") == "NET1" for label in labels)
+
+    check = session.dispatch("verify_schematic_connectivity", {})
+    assert check["status"] == "success"
+    assert isinstance(check["connected"], bool)
+    assert isinstance(check["errors"], list)
+    assert isinstance(check["warnings"], list)
+
+    saved = session.dispatch("save_schematic", {})
+    assert saved["status"] == "success"
+
+    with open(scratch, "r", encoding="utf-8", errors="ignore") as f:
+        assert "NET1" in f.read()
+
+
+def test_mcp_tier2_guards():
+    session = _fresh_session()
+    out = session.dispatch("run_design_task", {"task": ""})
+    assert out["status"] == "error"
+    assert out["code"] == "MISSING_ARGUMENT"
+
+    out = session.dispatch(
+        "run_design_task", {"task": "x", "domain": "radio"})
+    assert out["status"] == "error"
+    assert out["code"] == "BAD_DOMAIN"
+
+    saved_key = os.environ.pop("ANTHROPIC_API_KEY", None)
+    try:
+        out = session.dispatch("run_design_task", {"task": "add an LED"})
+    finally:
+        if saved_key is not None:
+            os.environ["ANTHROPIC_API_KEY"] = saved_key
+    assert out["status"] == "error"
+    assert out["code"] == "NO_API_KEY"
+
+
+def test_mcp_unknown_tool():
+    out = _fresh_session().dispatch("frobnicate", {})
+    assert out["status"] == "error"
+    assert "frobnicate" in out["message"]
