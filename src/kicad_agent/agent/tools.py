@@ -226,6 +226,49 @@ WRITE_TOOLS_SCHEMA: List[Dict[str, Any]] = [
     },
 ]
 
+SCHEMATIC_READ_SCHEMA: List[Dict[str, Any]] = [
+    {
+        "name": "get_schematic_state",
+        "description": "Inspect the active schematic: symbols (with position and rotation), wires, junctions, labels, sheets, and file path.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "get_symbol_pins",
+        "description": "Pin truth for a symbol: the exact coordinates wires connect to. With 'reference', returns pin tips for a placed symbol (accounts for its position and rotation); with only 'lib_id', returns library pins at the origin. Coordinates are in mm.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "lib_id": {"type": "string", "description": "Library id like 'Device:R' or 'Amplifier_Operational:LM358' (optional when 'reference' is given)"},
+                "reference": {"type": "string", "description": "Placed reference designator like 'R1' (requires an open schematic)"},
+            },
+        },
+    },
+    {
+        "name": "search_symbols",
+        "description": "Search KiCad symbol libraries by name, keywords, or description (e.g. 'opamp', 'resistor'). Returns lib_ids usable with add_symbol.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Free-text search query"},
+                "family": {"type": "string", "description": "Optional library family filter like 'Device'"},
+                "limit": {"type": "integer", "description": "Maximum results to return (default 20)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "verify_schematic_connectivity",
+        "description": "Check the active schematic's wiring: dangling wire ends and junction-less meets are errors; unconnected pins are warnings.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+]
+
 ALL_TOOLS_SCHEMA = READ_TOOLS_SCHEMA + WRITE_TOOLS_SCHEMA
 
 
@@ -333,6 +376,7 @@ class ToolRegistry:
             act = Action(action_type=ActionType.CREATE_BOARD_OUTLINE, domain=ActionDomain.PCB, parameters=arguments)
             res = self.backend.execute(act)
             return {"status": "success" if res.success else "error", "data": res.data, "error": str(res.error) if res.error else None}
+
 
         else:
             return {"status": "error", "message": f"Unknown tool '{tool_name}'"}
