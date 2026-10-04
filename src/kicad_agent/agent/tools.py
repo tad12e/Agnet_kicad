@@ -376,7 +376,7 @@ SCHEMATIC_WRITE_SCHEMA: List[Dict[str, Any]] = [
     },
 ]
 
-ALL_TOOLS_SCHEMA = READ_TOOLS_SCHEMA + WRITE_TOOLS_SCHEMA + SCHEMATIC_READ_SCHEMA + SCHEMATIC_WRITE_SCHEMA + SCHEMATIC_READ_SCHEMA + SCHEMATIC_WRITE_SCHEMA
+ALL_TOOLS_SCHEMA = READ_TOOLS_SCHEMA + WRITE_TOOLS_SCHEMA + SCHEMATIC_READ_SCHEMA + SCHEMATIC_WRITE_SCHEMA
 
 
 # ===========================================================================
@@ -427,6 +427,91 @@ class ToolRegistry:
             act = Action(action_type=ActionType.RUN_DRC, domain=ActionDomain.PCB)
             res = self.backend.execute(act)
             return {"status": "success" if res.success else "error", "drc": res.data, "error": str(res.error) if res.error else None}
+
+        # Schematic read tools
+        elif tool_name == "get_schematic_state":
+            state = self.backend.get_state("schematic")
+            if not state:
+                return {"status": "error", "message": "No schematic file open"}
+            return {"status": "success", "schematic": state}
+
+        elif tool_name == "get_symbol_pins":
+            from ..schematic.pin_geometry import resolve_pin_tips
+
+            ref = str(arguments.get("reference", "") or "")
+            lib_id = str(arguments.get("lib_id", "") or "")
+            if ref:
+                state = self.backend.get_state("schematic")
+                sym = next(
+                    (s for s in state.get("symbols", [])
+                     if s.get("reference") == ref),
+                    None,
+                )
+                if sym is None:
+                    return {"status": "error", "message": f"Symbol '{ref}' not found in active schematic"}
+                lib_id = lib_id or str(sym.get("lib_id", ""))
+                tips = resolve_pin_tips(
+                    lib_id,
+                    float(sym.get("x_mm", 0.0)),
+                    float(sym.get("y_mm", 0.0)),
+                    float(sym.get("rotation", 0.0)),
+                )
+            elif lib_id:
+                tips = resolve_pin_tips(lib_id, 0.0, 0.0, 0.0)
+            else:
+                return {"status": "error", "message": "Provide 'lib_id' or 'reference'"}
+            if tips is None:
+                return {"status": "error", "message": f"Could not resolve pins for '{lib_id or ref}': library not installed or unparsable"}
+            pins = [
+                {"number": num, "x": pos[0], "y": pos[1]}
+                for num, pos in sorted(tips.items())
+            ]
+            return {"status": "success", "lib_id": lib_id, "reference": ref, "pins": pins}
+
+        elif tool_name == "search_symbols":
+            from ..schematic.symbols import SymbolResolver
+
+            resolver = SymbolResolver.get_default()
+            results = resolver.search(
+                str(arguments.get("query", "")),
+                family=arguments.get("family"),
+            )
+            limit = int(arguments.get("limit", 20) or 20)
+            symbols = []
+            for info in results[:limit]:
+                symbols.append({
+                    "lib_id": info.lib_id,
+                    "name": info.name,
+                    "library": info.library,
+                    "description": info.description,
+                    "pin_count": info.pin_count,
+                    "pins": [
+                        {"number": p.number, "name": p.name, "type": p.pin_type}
+                        for p in info.pins
+                    ],
+                })
+            return {"status": "success", "count": len(symbols), "symbols": symbols}
+
+        elif tool_name == "verify_schematic_connectivity":
+            from ..schematic.pin_geometry import endpoint_report
+
+            state = self.backend.get_state("schematic")
+            path = state.get("file") if isinstance(state, dict) else None
+            if not path:
+                return {"status": "error", "message": "No schematic file open"}
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    text = f.read()
+            except OSError as e:
+                return {"status": "error", "message": f"Cannot read schematic: {e}"}
+            report = endpoint_report(text)
+            return {
+                "status": "success",
+                "connected": not report["errors"],
+                "errors": report["errors"],
+                "warnings": report["warnings"],
+                "stats": report["stats"],
+            }
 
         # Write tools
         elif tool_name == "create_board":
