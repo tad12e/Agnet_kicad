@@ -1,4 +1,5 @@
 anthropic>=0.18.0
+mcp>=1.0.0
 pynng>=0.7.0
 # Our vendored _pb2 files are gencode 7.35.1 -> runtime must be >=7.35.1.
 protobuf>=7.35.1

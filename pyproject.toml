@@ -13,6 +13,7 @@ authors = [
 ]
 dependencies = [
     "anthropic>=0.18.0",
+    "mcp>=1.0.0",
     "pynng>=0.7.0",
     # See requirements.txt: protobuf floor must stay >=7.35.1 for our
     # vendored gencode; kicad-python is a manual opt-in (pin conflict).
