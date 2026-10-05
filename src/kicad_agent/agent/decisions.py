@@ -25,7 +25,7 @@ class DecisionType(str, enum.Enum):
 @dataclass
 class AgentDecision:
     """Structured decision returned by the LLM reasoning engine.
-    
+
     Attributes:
         decision_type: Type of decision (TOOL_CALL, ASK_USER, COMPLETE, FAIL, PLAN_UPDATE).
         tool_name: Name of tool to execute (if decision_type == TOOL_CALL).

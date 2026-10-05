@@ -159,7 +159,7 @@ class AgentController:
                     if val_errors:
                         err_msg = "; ".join([e.message for e in val_errors])
                         trace.record("VALIDATION_ERROR", f"Precondition failed on '{action.action_type.value}': {err_msg}")
-                        
+
                         # Attempt deterministic L1/L2 repair
                         repaired = self.repair_engine.attempt_repair(
                             action,
