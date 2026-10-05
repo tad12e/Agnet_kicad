@@ -1,4 +1,7 @@
-"""Natural language request to structured Plan & Action IR converter."""
+"""Natural language request to structured Plan & Action IR converter.
+
+Provides high-level engineering stage decomposition and backward-compatible deterministic plans.
+"""
 
 from __future__ import annotations
 
@@ -9,13 +12,120 @@ from ..core.actions import Action, ActionDomain, ActionType
 from ..core.goals import Goal, GoalType
 from ..core.plans import Plan
 from ..providers.llm import AnthropicProvider, LLMProvider
+from ..tasks import Task, TaskType, TaskValidator
 
 
 class Planner:
-    """Translates user requests into domain-neutral structured plans with dependency graphs."""
+    """Translates user requests into domain-neutral structured plans with dependency graphs and stages."""
 
     def __init__(self, provider: Optional[LLMProvider] = None):
         self.provider = provider or AnthropicProvider()
+        self.task_validator = TaskValidator()
+
+    def plan_stages(self, task: Task) -> List[str]:
+        """Decompose a high-level engineering task into progressive verification stages."""
+        task_type = task.task_type
+        if task_type == TaskType.BUILD_CIRCUIT:
+            return [
+                "Stage 1: Inspect environment & verify requirements",
+                "Stage 2: Determine & place circuit components",
+                "Stage 3: Establish electrical pin-to-pin connections",
+                "Stage 4: Verify electrical connectivity & nets",
+                "Stage 5: Run ERC / DRC rule checks",
+            ]
+        elif task_type == TaskType.CREATE_SCHEMATIC:
+            return [
+                "Stage 1: Initialize schematic sheet",
+                "Stage 2: Place schematic symbols",
+                "Stage 3: Route schematic wires and net labels",
+                "Stage 4: Run ERC verification",
+            ]
+        elif task_type == TaskType.ROUTE_BOARD:
+            return [
+                "Stage 1: Inspect board netlist and unrouted ratsnest",
+                "Stage 2: Route power and ground tracks / planes",
+                "Stage 3: Route signal tracks and vias",
+                "Stage 4: Run DRC verification",
+            ]
+        elif task_type == TaskType.FIX_DRC_ERRORS:
+            return [
+                "Stage 1: Run DRC and inspect violation report",
+                "Stage 2: Apply clearances / coordinate corrections",
+                "Stage 3: Re-run DRC to confirm 0 violations",
+            ]
+        return [
+            "Stage 1: Inspect environment",
+            "Stage 2: Execute design operations",
+            "Stage 3: Verify completion",
+        ]
+
+    def plan_task(
+        self,
+        task: Task,
+        domain: Optional[str] = None,
+        current_state: Optional[Dict[str, Any]] = None,
+    ) -> Plan:
+        """Convert a high-level task into a deterministic plan of low-level actions."""
+        if domain is None:
+            domain = task.domain
+
+        task_errors = self.task_validator.validate(task)
+        if task_errors:
+            plan = Plan(metadata={"task": task.to_dict(), "domain": domain})
+            action = Action(
+                action_type=ActionType.GET_STATE,
+                domain=ActionDomain.PCB if domain == "pcb" else ActionDomain.SCHEMATIC,
+                parameters={"error": [e.message for e in task_errors]},
+                description="Task validation failed",
+            )
+            plan.add_action(action)
+            return plan
+
+        plan = Plan(metadata={"task": task.to_dict(), "domain": domain, "stages": self.plan_stages(task)})
+        task_type = task.task_type
+
+        if task_type == TaskType.BUILD_CIRCUIT:
+            circuit_type = str(task.requirements.get("circuit_type", "led")).lower()
+            plan.goals.append(Goal(goal_type=GoalType.SCHEMATIC_CREATION, description=f"Build {circuit_type} circuit"))
+
+            act_board = Action(
+                action_type=ActionType.CREATE_BOARD,
+                domain=ActionDomain.PCB if domain == "pcb" else ActionDomain.SCHEMATIC,
+                description="Initialize design workspace",
+            )
+            plan.add_action(act_board)
+
+            components = task.requirements.get("components", [])
+            for idx, component in enumerate(components):
+                comp_type = str(component.get("type", "component")).lower()
+                ref = f"{comp_type.upper()[:1]}{idx + 1}"
+                value = component.get("value", "")
+                action = Action(
+                    action_type=ActionType.ADD_SYMBOL if domain == "schematic" else ActionType.ADD_FOOTPRINT,
+                    domain=ActionDomain.SCHEMATIC if domain == "schematic" else ActionDomain.PCB,
+                    parameters={
+                        "reference": ref,
+                        "value": value,
+                        "component_type": comp_type,
+                        "x": 10.0 + idx * 20.0,
+                        "y": 10.0 + (idx % 2) * 20.0,
+                    },
+                    description=f"Place {comp_type} {ref}",
+                )
+                plan.add_action(action)
+
+            if task.requirements.get("components"):
+                wire_action = Action(
+                    action_type=ActionType.ADD_WIRE,
+                    domain=ActionDomain.SCHEMATIC,
+                    parameters={"net_name": "SIGNAL", "start": (0, 0), "end": (20, 0)},
+                    description="Connect circuit elements",
+                )
+                plan.add_action(wire_action)
+
+            return plan
+
+        return self.plan_request(task.description, domain=domain, current_state=current_state)
 
     def plan_request(self, user_request: str, domain: str = "pcb", current_state: Optional[Dict[str, Any]] = None) -> Plan:
         """Parse natural language request into structured goals and actions."""

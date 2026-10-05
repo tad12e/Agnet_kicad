@@ -3,7 +3,7 @@
 Implements the 5-tiered error recovery strategy:
   Level 1: Deterministic local repair (e.g. coordinate shift, boundary clamp)
   Level 2: Rule-based repair (e.g. auto-increment ref, default footprint map)
-  Level 3: AI repair / replanning
+  Level 3: LLM reasoning / replanning diagnostic synthesis
   Level 4: Fallback backend execution
   Level 5: Escalate and report diagnostic failure
 """
@@ -31,7 +31,7 @@ class RepairEngine:
         verification: Optional[VerificationResult] = None,
         attempt: int = 1,
     ) -> Optional[Action]:
-        """Attempt to construct a corrected replacement action for a failed step."""
+        """Attempt to construct a corrected replacement action for a failed step (Levels 1 & 2)."""
         err_msg = ""
         category = ErrorCategory.UNKNOWN_ERROR
 
@@ -130,3 +130,36 @@ class RepairEngine:
             )
 
         return None
+
+    def synthesize_error_diagnostic(
+        self,
+        failed_action: Action,
+        result: Optional[ActionResult] = None,
+        verification: Optional[VerificationResult] = None,
+    ) -> Dict[str, Any]:
+        """Synthesize structured diagnostic feedback for Level 3 LLM reasoning and replanning."""
+        err_msg = ""
+        category = ErrorCategory.UNKNOWN_ERROR
+
+        if verification and not verification.passed:
+            err_msg = verification.message
+            category = ErrorCategory.PLACEMENT_ERROR if "placement" in verification.verifier_name else ErrorCategory.GEOMETRY_ERROR
+        elif result and not result.success and result.error:
+            err_msg = result.error.message
+            category = result.error.category
+
+        suggestions = []
+        if "endpoint" in err_msg.lower() or "connect" in err_msg.lower():
+            suggestions.append("Inspect component pins using 'get_symbol_pins' to confirm exact pin coordinate endpoints.")
+        elif "already exists" in err_msg.lower():
+            suggestions.append("Use a distinct reference designator or inspect existing design components with 'get_schematic_state'.")
+        elif "drc" in err_msg.lower() or "clearance" in err_msg.lower():
+            suggestions.append("Increase spacing between components or re-route track with wider clearance.")
+
+        return {
+            "failed_action": failed_action.to_dict(),
+            "category": category.value if hasattr(category, "value") else str(category),
+            "error_message": err_msg,
+            "suggestions": suggestions,
+            "recoverable": True,
+        }
