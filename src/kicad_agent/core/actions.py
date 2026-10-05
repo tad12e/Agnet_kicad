@@ -23,8 +23,12 @@ class ActionDomain(str, enum.Enum):
 
 class ActionType(str, enum.Enum):
     """Enumeration of domain actions."""
-    # State & Board Lifecycle
+    # Inspection & State Queries
     GET_STATE = "get_state"
+    GET_SCHEMATIC_STATE = "get_schematic_state"
+    GET_BOARD_STATE = "get_board_state"
+    GET_SYMBOL_PINS = "get_symbol_pins"
+    GET_NETS = "get_nets"
     CREATE_BOARD = "create_board"
     LOAD_DOCUMENT = "load_document"
     LOAD_BOARD = "load_board"
@@ -57,6 +61,7 @@ class ActionType(str, enum.Enum):
     
     # Verification & Checking Operations
     RUN_DRC = "run_drc"
+    RUN_ERC = "run_erc"
     CHECK_CONNECTIVITY = "check_connectivity"
     VERIFY_CONNECTIVITY = "verify_connectivity"
     CHECK_GEOMETRY = "check_geometry"
