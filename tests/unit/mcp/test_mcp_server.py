@@ -19,8 +19,8 @@ def _fresh_session():
 
 def test_mcp_tool_schemas_complete():
     tools = all_tool_definitions()
-    assert len(tools) == 36  # 5 session + 1 tier2 + 18 pcb + 12 schematic
-    assert len(ALL_TOOLS_SCHEMA) == 30
+    assert len(tools) == 38  # 5 session + 1 tier2 + 19 pcb + 13 schematic
+    assert len(ALL_TOOLS_SCHEMA) == 32
     names = [t["name"] for t in tools]
     for expected in (
         "open_schematic", "open_pcb", "save_schematic", "save_pcb",
@@ -29,7 +29,7 @@ def test_mcp_tool_schemas_complete():
         "verify_schematic_connectivity",
         "add_symbol", "add_wire", "add_junction", "add_label",
         "add_bus", "move_symbol", "rotate_symbol", "delete_symbol",
-        "add_footprint", "add_track",
+        "add_footprint", "add_track", "run_erc",
     ):
         assert expected in names, f"missing tool: {expected}"
     for tool in tools:

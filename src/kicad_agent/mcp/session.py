@@ -250,12 +250,33 @@ class MCPSession:
                 self, str(args.get("task", "") or ""),
                 str(args.get("domain", "schematic") or "schematic"),
             )
+        if tool_name == "verify_schematic_connectivity":
+            if not self.sch_path:
+                return {"status": "error", "code": "NO_ACTIVE_DOCUMENT",
+                        "message": "No schematic open. Call open_schematic first."}
+            from ..schematic.pin_geometry import endpoint_report
+            with open(self.sch_path, "r", encoding="utf-8", errors="ignore") as f:
+                report = endpoint_report(f.read())
+            return {
+                "status": "success",
+                "connected": not report["errors"],
+                "errors": report["errors"],
+                "warnings": [w["message"] for w in report["warnings"]],
+            }
         try:
             if tool_name in SCHEMATIC_TOOL_NAMES:
                 if tool_name not in ("search_symbols",) and not self.sch_path:
                     return {"status": "error", "code": "NO_ACTIVE_DOCUMENT",
                             "message": "No schematic open. Call open_schematic first."}
-                return self.sch_tools.execute_tool(tool_name, args)
+                result = self.sch_tools.execute_tool(tool_name, args)
+                if tool_name == "get_schematic_state" and result.get("status") == "success":
+                    result["schematic"] = result.pop("data", {})
+                return result
+            if tool_name not in {
+                t["name"] for t in self.pcb_tools.get_available_tools("pcb")
+            }:
+                return {"status": "error", "code": "UNKNOWN_TOOL",
+                        "message": f"Unknown tool: {tool_name}"}
             return self.pcb_tools.execute_tool(tool_name, args)
         except Exception as e:  # never leak a traceback over the wire
             return {"status": "error", "code": "TOOL_FAILED",

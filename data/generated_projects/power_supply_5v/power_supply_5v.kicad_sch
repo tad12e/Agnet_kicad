@@ -1,0 +1,534 @@
+(kicad_sch
+	(version 20260306)
+	(generator "eeschema")
+	(generator_version "10.0")
+	(uuid "219d129c-007e-4faf-9a99-e464fc06ccd9")
+	(paper "A4")
+	(lib_symbols
+    (symbol "Device:C"
+		(pin_numbers
+			(hide yes)
+		)
+		(pin_names
+			(offset 0.254)
+		)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(duplicate_pin_numbers_are_jumpers no)
+		(property "Reference" "C"
+			(at 0.635 2.54 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "C"
+			(at 0.635 -2.54 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 0.9652 -3.81 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "ki_keywords" "cap capacitor"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "ki_fp_filters" "C_*"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(symbol "C_0_1"
+			(polyline
+				(pts
+					(xy -2.032 0.762) (xy 2.032 0.762)
+				)
+				(stroke
+					(width 0.508)
+					(type default)
+				)
+				(fill
+					(type none)
+				)
+			)
+			(polyline
+				(pts
+					(xy -2.032 -0.762) (xy 2.032 -0.762)
+				)
+				(stroke
+					(width 0.508)
+					(type default)
+				)
+				(fill
+					(type none)
+				)
+			)
+		)
+		(symbol "C_1_1"
+			(pin passive line
+				(at 0 3.81 270)
+				(length 2.794)
+				(name ""
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at 0 -3.81 90)
+				(length 2.794)
+				(name ""
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "2"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+		)
+		(embedded_fonts no)
+	)
+    (symbol "Regulator_Linear:LM7805_TO220"
+		(pin_names
+			(offset 0.254)
+		)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(duplicate_pin_numbers_are_jumpers no)
+		(property "Reference" "U"
+			(at -3.81 3.175 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "LM7805_TO220"
+			(at 0 3.175 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Package_TO_SOT_THT:TO-220-3_Vertical"
+			(at 0 5.715 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+					(italic yes)
+				)
+			)
+		)
+		(property "Datasheet" "https://www.onsemi.cn/PowerSolutions/document/MC7800-D.PDF"
+			(at 0 -1.27 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Positive 1A 35V Linear Regulator, Fixed Output 5V, TO-220"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "ki_keywords" "Voltage Regulator 1A Positive"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "ki_fp_filters" "TO?220*"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(symbol "LM7805_TO220_0_1"
+			(rectangle
+				(start -5.08 1.905)
+				(end 5.08 -5.08)
+				(stroke
+					(width 0.254)
+					(type default)
+				)
+				(fill
+					(type background)
+				)
+			)
+		)
+		(symbol "LM7805_TO220_1_1"
+			(pin power_in line
+				(at -7.62 0 0)
+				(length 2.54)
+				(name "VI"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin power_in line
+				(at 0 -7.62 90)
+				(length 2.54)
+				(name "GND"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "2"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin power_out line
+				(at 7.62 0 180)
+				(length 2.54)
+				(name "VO"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "3"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+		)
+		(embedded_fonts no)
+	))
+
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+  (symbol
+    (lib_id "Regulator_Linear:LM7805_TO220")
+    (at 100.0 100.0 0)
+    (unit 1)
+    (body_style 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (in_pos_files yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid "ad857fcc-b391-4265-955b-9bb5890fcfb3")
+    (property "Reference" "U1"
+      (at 102.54 98.73 0)
+      (effects (font (size 1.27 1.27)) (justify left))
+    )
+    (property "Value" "LM7805"
+      (at 102.54 101.27 0)
+      (effects (font (size 1.27 1.27)) (justify left))
+    )
+    (property "Footprint" ""
+      (at 100.0 100.0 0)
+      (hide yes)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Datasheet" "~"
+      (at 100.0 100.0 0)
+      (hide yes)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Description" "LM7805 LM7805_TO220"
+      (at 100.0 100.0 0)
+      (hide yes)
+      (effects (font (size 1.27 1.27)))
+    )
+    (pin "1" (uuid "4ab05483-5cec-48e3-bb3e-78f0598fabf4"))
+    (pin "2" (uuid "c8509b90-c87d-4193-96f4-e30ed2886f9f"))
+    (instances
+      (project "power_supply_5v"
+        (path "/219d129c-007e-4faf-9a99-e464fc06ccd9"
+          (reference "U1")
+          (unit 1)
+        )
+      )
+    )
+  )
+  (symbol
+    (lib_id "Device:CP")
+    (at 80.0 100.0 0)
+    (unit 1)
+    (body_style 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (in_pos_files yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid "eb6ef2fd-a9c5-4f4c-886f-1461ad410c0c")
+    (property "Reference" "C1"
+      (at 82.54 98.73 0)
+      (effects (font (size 1.27 1.27)) (justify left))
+    )
+    (property "Value" "0.33uF"
+      (at 82.54 101.27 0)
+      (effects (font (size 1.27 1.27)) (justify left))
+    )
+    (property "Footprint" ""
+      (at 80.0 100.0 0)
+      (hide yes)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Datasheet" "~"
+      (at 80.0 100.0 0)
+      (hide yes)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Description" "0.33uF CP"
+      (at 80.0 100.0 0)
+      (hide yes)
+      (effects (font (size 1.27 1.27)))
+    )
+    (pin "1" (uuid "8a80b40b-7e79-47c4-a368-f7164bba32fe"))
+    (pin "2" (uuid "9f0d2ad8-6739-47f6-844b-3ee22138ae8d"))
+    (instances
+      (project "power_supply_5v"
+        (path "/219d129c-007e-4faf-9a99-e464fc06ccd9"
+          (reference "C1")
+          (unit 1)
+        )
+      )
+    )
+  )
+  (symbol
+    (lib_id "Device:C")
+    (at 120.0 100.0 0)
+    (unit 1)
+    (body_style 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (in_pos_files yes)
+    (dnp no)
+    (fields_autoplaced yes)
+    (uuid "3c611347-e5f7-4c53-90df-2577586c7330")
+    (property "Reference" "C2"
+      (at 122.54 98.73 0)
+      (effects (font (size 1.27 1.27)) (justify left))
+    )
+    (property "Value" "0.1uF"
+      (at 122.54 101.27 0)
+      (effects (font (size 1.27 1.27)) (justify left))
+    )
+    (property "Footprint" ""
+      (at 120.0 100.0 0)
+      (hide yes)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Datasheet" "~"
+      (at 120.0 100.0 0)
+      (hide yes)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Description" "0.1uF C"
+      (at 120.0 100.0 0)
+      (hide yes)
+      (effects (font (size 1.27 1.27)))
+    )
+    (pin "1" (uuid "cf3ac6f9-8d89-402b-88a0-e20dd073370d"))
+    (pin "2" (uuid "b5d23bdb-3b84-4074-ac33-9f4a8f26dcb5"))
+    (instances
+      (project "power_supply_5v"
+        (path "/219d129c-007e-4faf-9a99-e464fc06ccd9"
+          (reference "C2")
+          (unit 1)
+        )
+      )
+    )
+  )
+  (wire
+    (pts
+      (xy 80.0 100.0) (xy 100.0 100.0)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "c6f13392-40b6-47c7-8375-d536311ca84c")
+  )
+  (wire
+    (pts
+      (xy 80.0 100.0) (xy 100.0 100.0)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "00fde31b-07f8-473b-a0dc-74a0efb7f5b2")
+  )
+  (wire
+    (pts
+      (xy 80.0 100.0) (xy 100.0 100.0)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "81bbfb3a-2c25-4322-8071-f78b480949cd")
+  )
+  (wire
+    (pts
+      (xy 80.0 100.0) (xy 100.0 100.0)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "4e5f933e-b21d-40ce-9049-e016aac3b234")
+  )
+  (wire
+    (pts
+      (xy 80.0 100.0) (xy 100.0 100.0)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "74afe6ec-17bd-4fdd-aaec-b56acba57935")
+  )
+  (wire
+    (pts
+      (xy 80.0 100.0) (xy 100.0 100.0)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "c7a27700-4488-4ed8-ad3d-d7baa1b8cfc4")
+  )
+  (wire
+    (pts
+      (xy 80.0 100.0) (xy 100.0 100.0)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "5f08bb76-9763-49dd-bfb7-3235ecd4f9c1")
+  )
+)

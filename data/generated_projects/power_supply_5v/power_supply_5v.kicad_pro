@@ -1,0 +1,24 @@
+{
+  "board": {
+    "design_settings": {
+      "defaults": {
+        "board_outline_line_width": 0.1,
+        "copper_line_width": 0.25
+      }
+    }
+  },
+  "meta": {
+    "filename": "power_supply_5v.kicad_pro",
+    "version": 1
+  },
+  "net_settings": {},
+  "schematic": {
+    "drawing": {}
+  },
+  "sheets": [
+    [
+      "",
+      "power_supply_5v.kicad_sch"
+    ]
+  ]
+}

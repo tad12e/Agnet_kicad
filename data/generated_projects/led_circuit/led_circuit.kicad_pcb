@@ -1,0 +1,354 @@
+(kicad_pcb (version 20260206) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (36 "B.SilkS" user "B.Silkscreen") (37 "F.SilkS" user "F.Silkscreen") (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+(footprint "Resistor_SMD:R_0402_1005Metric"
+    (version 20260206)
+    (at 100.0 100.0)
+    (uuid "01567ed8-f343-40e3-980d-1cbd81994f41")
+    (generator "kicad-footprint-generator")
+    (layer "F.Cu")
+    (descr "Resistor SMD 0402  ( 1005 Metric ) , square  ( rectangular )  end terminal, IPC-7351 nominal,  ( Body size source: IPC-SM-782 page 72, https://www.pcb-3d.com/wordpress/wp-content/uploads/ipc-sm-782a_amendment_1_and_2.pdf ) ")
+    (tags "resistor")
+    (property "Reference" "R"
+      (at 0 -1.17 0)
+      (layer "F.SilkS")
+      (effects
+        (font
+          (size 1 1)
+          (thickness 0.15))))
+    (property "Value" "10k"
+      (at 0 1.17 0)
+      (layer "F.Fab")
+      (effects
+        (font
+          (size 1 1)
+          (thickness 0.15))))
+    (property "KiLib_Generator" "SMD_2terminal_chip_molded"
+      (at 0 0 0)
+      (layer "F.SilkS")
+      (hide yes)
+      (effects
+        (font
+          (size 1 1)
+          (thickness 0.15))))
+    (attr smd)
+    (duplicate_pad_numbers_are_jumpers no)
+    (fp_line
+      (start -0.153641 -0.38)
+      (end 0.153641 -0.38)
+      (stroke
+        (width 0.12)
+        (type solid))
+      (layer "F.SilkS"))
+    (fp_line
+      (start -0.153641 0.38)
+      (end 0.153641 0.38)
+      (stroke
+        (width 0.12)
+        (type solid))
+      (layer "F.SilkS"))
+    (fp_rect
+      (start -0.93 -0.47)
+      (end 0.93 0.47)
+      (stroke
+        (width 0.05)
+        (type solid))
+      (fill no)
+      (layer "F.CrtYd"))
+    (fp_rect
+      (start -0.525 -0.27)
+      (end 0.525 0.27)
+      (stroke
+        (width 0.1)
+        (type solid))
+      (fill no)
+      (layer "F.Fab"))
+    (fp_text user "${REFERENCE}"
+      (at 0 0 0)
+      (layer "F.Fab")
+      (effects
+        (font
+          (size 0.26 0.26)
+          (thickness 0.04))))
+    (pad "1" smd roundrect
+      (at -0.51 0)
+      (size 0.54 0.64)
+      (layers "F.Cu" "F.Mask" "F.Paste")
+      (roundrect_rratio 0.25))
+    (pad "2" smd roundrect
+      (at 0.51 0)
+      (size 0.54 0.64)
+      (layers "F.Cu" "F.Mask" "F.Paste")
+      (roundrect_rratio 0.25))
+    (embedded_fonts no)
+    (model "${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402_1005Metric.step"
+      (offset
+        (xyz 0 0 0))
+      (scale
+        (xyz 1 1 1))
+      (rotate
+        (xyz 0 0 0))))
+(footprint "Resistor_SMD:R_0402_1005Metric"
+    (version 20260206)
+    (at 100.0 100.0)
+    (uuid "eb01a4d3-77f8-409a-995d-f309b4ba6c11")
+    (generator "kicad-footprint-generator")
+    (layer "F.Cu")
+    (descr "Resistor SMD 0402  ( 1005 Metric ) , square  ( rectangular )  end terminal, IPC-7351 nominal,  ( Body size source: IPC-SM-782 page 72, https://www.pcb-3d.com/wordpress/wp-content/uploads/ipc-sm-782a_amendment_1_and_2.pdf ) ")
+    (tags "resistor")
+    (property "Reference" "D"
+      (at 0 -1.17 0)
+      (layer "F.SilkS")
+      (effects
+        (font
+          (size 1 1)
+          (thickness 0.15))))
+    (property "Value" "LED"
+      (at 0 1.17 0)
+      (layer "F.Fab")
+      (effects
+        (font
+          (size 1 1)
+          (thickness 0.15))))
+    (property "KiLib_Generator" "SMD_2terminal_chip_molded"
+      (at 0 0 0)
+      (layer "F.SilkS")
+      (hide yes)
+      (effects
+        (font
+          (size 1 1)
+          (thickness 0.15))))
+    (attr smd)
+    (duplicate_pad_numbers_are_jumpers no)
+    (fp_line
+      (start -0.153641 -0.38)
+      (end 0.153641 -0.38)
+      (stroke
+        (width 0.12)
+        (type solid))
+      (layer "F.SilkS"))
+    (fp_line
+      (start -0.153641 0.38)
+      (end 0.153641 0.38)
+      (stroke
+        (width 0.12)
+        (type solid))
+      (layer "F.SilkS"))
+    (fp_rect
+      (start -0.93 -0.47)
+      (end 0.93 0.47)
+      (stroke
+        (width 0.05)
+        (type solid))
+      (fill no)
+      (layer "F.CrtYd"))
+    (fp_rect
+      (start -0.525 -0.27)
+      (end 0.525 0.27)
+      (stroke
+        (width 0.1)
+        (type solid))
+      (fill no)
+      (layer "F.Fab"))
+    (fp_text user "${REFERENCE}"
+      (at 0 0 0)
+      (layer "F.Fab")
+      (effects
+        (font
+          (size 0.26 0.26)
+          (thickness 0.04))))
+    (pad "1" smd roundrect
+      (at -0.51 0)
+      (size 0.54 0.64)
+      (layers "F.Cu" "F.Mask" "F.Paste")
+      (roundrect_rratio 0.25))
+    (pad "2" smd roundrect
+      (at 0.51 0)
+      (size 0.54 0.64)
+      (layers "F.Cu" "F.Mask" "F.Paste")
+      (roundrect_rratio 0.25))
+    (embedded_fonts no)
+    (model "${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402_1005Metric.step"
+      (offset
+        (xyz 0 0 0))
+      (scale
+        (xyz 1 1 1))
+      (rotate
+        (xyz 0 0 0))))
+(footprint "Resistor_SMD:R_0402_1005Metric"
+    (version 20260206)
+    (at 100.0 100.0)
+    (uuid "3f2e4cd7-8d8b-4f82-abd0-e78d8a5bc371")
+    (generator "kicad-footprint-generator")
+    (layer "F.Cu")
+    (descr "Resistor SMD 0402  ( 1005 Metric ) , square  ( rectangular )  end terminal, IPC-7351 nominal,  ( Body size source: IPC-SM-782 page 72, https://www.pcb-3d.com/wordpress/wp-content/uploads/ipc-sm-782a_amendment_1_and_2.pdf ) ")
+    (tags "resistor")
+    (property "Reference" "D1"
+      (at 0 -1.17 0)
+      (layer "F.SilkS")
+      (effects
+        (font
+          (size 1 1)
+          (thickness 0.15))))
+    (property "Value" "LED"
+      (at 0 1.17 0)
+      (layer "F.Fab")
+      (effects
+        (font
+          (size 1 1)
+          (thickness 0.15))))
+    (property "KiLib_Generator" "SMD_2terminal_chip_molded"
+      (at 0 0 0)
+      (layer "F.SilkS")
+      (hide yes)
+      (effects
+        (font
+          (size 1 1)
+          (thickness 0.15))))
+    (attr smd)
+    (duplicate_pad_numbers_are_jumpers no)
+    (fp_line
+      (start -0.153641 -0.38)
+      (end 0.153641 -0.38)
+      (stroke
+        (width 0.12)
+        (type solid))
+      (layer "F.SilkS"))
+    (fp_line
+      (start -0.153641 0.38)
+      (end 0.153641 0.38)
+      (stroke
+        (width 0.12)
+        (type solid))
+      (layer "F.SilkS"))
+    (fp_rect
+      (start -0.93 -0.47)
+      (end 0.93 0.47)
+      (stroke
+        (width 0.05)
+        (type solid))
+      (fill no)
+      (layer "F.CrtYd"))
+    (fp_rect
+      (start -0.525 -0.27)
+      (end 0.525 0.27)
+      (stroke
+        (width 0.1)
+        (type solid))
+      (fill no)
+      (layer "F.Fab"))
+    (fp_text user "${REFERENCE}"
+      (at 0 0 0)
+      (layer "F.Fab")
+      (effects
+        (font
+          (size 0.26 0.26)
+          (thickness 0.04))))
+    (pad "1" smd roundrect
+      (at -0.51 0)
+      (size 0.54 0.64)
+      (layers "F.Cu" "F.Mask" "F.Paste")
+      (roundrect_rratio 0.25))
+    (pad "2" smd roundrect
+      (at 0.51 0)
+      (size 0.54 0.64)
+      (layers "F.Cu" "F.Mask" "F.Paste")
+      (roundrect_rratio 0.25))
+    (embedded_fonts no)
+    (model "${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402_1005Metric.step"
+      (offset
+        (xyz 0 0 0))
+      (scale
+        (xyz 1 1 1))
+      (rotate
+        (xyz 0 0 0))))
+(footprint "Resistor_SMD:R_0402_1005Metric"
+    (version 20260206)
+    (at 100.0 100.0)
+    (uuid "7f3bc42e-90c0-47b0-9cf1-6401dee408ab")
+    (generator "kicad-footprint-generator")
+    (layer "F.Cu")
+    (descr "Resistor SMD 0402  ( 1005 Metric ) , square  ( rectangular )  end terminal, IPC-7351 nominal,  ( Body size source: IPC-SM-782 page 72, https://www.pcb-3d.com/wordpress/wp-content/uploads/ipc-sm-782a_amendment_1_and_2.pdf ) ")
+    (tags "resistor")
+    (property "Reference" "R1"
+      (at 0 -1.17 0)
+      (layer "F.SilkS")
+      (effects
+        (font
+          (size 1 1)
+          (thickness 0.15))))
+    (property "Value" "10k"
+      (at 0 1.17 0)
+      (layer "F.Fab")
+      (effects
+        (font
+          (size 1 1)
+          (thickness 0.15))))
+    (property "KiLib_Generator" "SMD_2terminal_chip_molded"
+      (at 0 0 0)
+      (layer "F.SilkS")
+      (hide yes)
+      (effects
+        (font
+          (size 1 1)
+          (thickness 0.15))))
+    (attr smd)
+    (duplicate_pad_numbers_are_jumpers no)
+    (fp_line
+      (start -0.153641 -0.38)
+      (end 0.153641 -0.38)
+      (stroke
+        (width 0.12)
+        (type solid))
+      (layer "F.SilkS"))
+    (fp_line
+      (start -0.153641 0.38)
+      (end 0.153641 0.38)
+      (stroke
+        (width 0.12)
+        (type solid))
+      (layer "F.SilkS"))
+    (fp_rect
+      (start -0.93 -0.47)
+      (end 0.93 0.47)
+      (stroke
+        (width 0.05)
+        (type solid))
+      (fill no)
+      (layer "F.CrtYd"))
+    (fp_rect
+      (start -0.525 -0.27)
+      (end 0.525 0.27)
+      (stroke
+        (width 0.1)
+        (type solid))
+      (fill no)
+      (layer "F.Fab"))
+    (fp_text user "${REFERENCE}"
+      (at 0 0 0)
+      (layer "F.Fab")
+      (effects
+        (font
+          (size 0.26 0.26)
+          (thickness 0.04))))
+    (pad "1" smd roundrect
+      (at -0.51 0)
+      (size 0.54 0.64)
+      (layers "F.Cu" "F.Mask" "F.Paste")
+      (roundrect_rratio 0.25))
+    (pad "2" smd roundrect
+      (at 0.51 0)
+      (size 0.54 0.64)
+      (layers "F.Cu" "F.Mask" "F.Paste")
+      (roundrect_rratio 0.25))
+    (embedded_fonts no)
+    (model "${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402_1005Metric.step"
+      (offset
+        (xyz 0 0 0))
+      (scale
+        (xyz 1 1 1))
+      (rotate
+        (xyz 0 0 0))))
+)
