@@ -11,6 +11,7 @@ from kicad_agent.core.actions import Action, ActionType
 from kicad_agent.core.errors import AgentError, ErrorCategory
 from kicad_agent.core.results import ActionResult
 from kicad_agent.core.validator import ActionValidator
+from kicad_agent.tasks import Task, TaskType, TaskValidator
 
 
 def test_planner_request_generation():
@@ -105,3 +106,53 @@ def test_agent_orchestrator_run():
     assert len(result["results"]) > 0
     assert "trace" in result
     assert len(result["trace"]["events"]) > 0
+
+
+def test_task_creation_and_validation():
+    task = Task(
+        task_id="task-001",
+        task_type=TaskType.BUILD_CIRCUIT,
+        domain="schematic",
+        description="Build a simple LED circuit",
+        requirements={
+            "circuit_type": "led",
+            "components": [
+                {"type": "resistor", "value": "1k"},
+                {"type": "led"},
+                {"type": "power_source", "voltage": 5},
+            ],
+        },
+    )
+
+    errors = TaskValidator().validate(task)
+    assert len(errors) == 0
+
+    bad_task = Task(
+        task_id="task-002",
+        task_type=TaskType.BUILD_CIRCUIT,
+        domain="schematic",
+        description="",
+        requirements={},
+    )
+    assert len(TaskValidator().validate(bad_task)) > 0
+
+
+def test_planner_builds_plan_from_task():
+    planner = Planner()
+    task = Task(
+        task_id="task-003",
+        task_type=TaskType.BUILD_CIRCUIT,
+        domain="schematic",
+        description="Build a simple LED circuit",
+        requirements={
+            "circuit_type": "led",
+            "components": [
+                {"type": "resistor", "value": "1k"},
+                {"type": "led"},
+            ],
+        },
+    )
+
+    plan = planner.plan_task(task, domain="schematic", current_state={"components": []})
+    assert len(plan.actions) >= 2
+    assert plan.goals
