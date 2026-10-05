@@ -623,6 +623,10 @@ class IPCBackend(KiCadBackend):
             return state
         # Core read (required): failure raises, never phantom items.
         state.update(self.get_schematic_snapshot(doc))
+        if self.fallback is not None and not state.get("components"):
+            fallback_state = self.fallback.get_state("schematic")
+            if fallback_state.get("components"):
+                state.update(fallback_state)
         # Enrichment (best-effort): failures recorded explicitly per section.
         for section, reader in (
             ("sheets", self.get_schematic_hierarchy),

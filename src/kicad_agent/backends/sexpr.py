@@ -379,56 +379,29 @@ def add_symbol_to_schematic(
 
     sym_pins = ["1", "2"]
 
-    def _inject_lib_def(formatted_def: str) -> None:
-        nonlocal content
-        if has_lib_symbols:
-            idx = content.find("(lib_symbols")
-            if idx != -1:
-                insert_pos = idx + len("(lib_symbols")
-                content = content[:insert_pos] + "\n    " + formatted_def + content[insert_pos:]
-        else:
-            m_paper = re.search(r'\(paper\s+"[^"]+"\)', content)
-            if m_paper:
-                insert_pos = m_paper.end()
-                content = (
-                    content[:insert_pos]
-                    + f"\n  (lib_symbols\n    {formatted_def}\n  )"
-                    + content[insert_pos:]
-                )
-
     if not has_sym_in_lib and lib_name:
-        # Shared resolver (single source of truth with pin_geometry):
-        # parses the library, resolves `extends' aliases (LM358 -> LM2904)
-        # into a standalone definition, renames unit children, and takes
-        # the real unit-1 pin list.
-        from ..schematic.pin_geometry import resolve_lib_def
-
         symbols_dir = get_kicad_symbols_dir()
         lib_file = os.path.join(symbols_dir, f"{lib_name}.kicad_sym")
         if os.path.exists(lib_file):
-            resolved_ok = False
             try:
-                resolved, unit_pins = resolve_lib_def(lib_name, symbol_name, unit=1)
-                if resolved is not None:
-                    if unit_pins:
-                        sym_pins = unit_pins
-                    formatted_def = re.sub(
-                        r'^\(symbol\s+"([^"]+)"',
-                        f'(symbol "{full_lib_id}"',
-                        format_sexp(resolved, indent=4, indent_size=2).strip(),
-                    )
-                    _inject_lib_def(formatted_def)
-                    resolved_ok = True
+                sym_def_str = extract_symbol_definition(lib_file, symbol_name)
+                formatted_def = re.sub(r'^\(symbol\s+"([^"]+)"', f'(symbol "{full_lib_id}"', sym_def_str.strip())
+                if has_lib_symbols:
+                    idx = content.find("(lib_symbols")
+                    if idx != -1:
+                        insert_pos = idx + len("(lib_symbols")
+                        content = content[:insert_pos] + "\n    " + formatted_def + content[insert_pos:]
+                else:
+                    m_paper = re.search(r'\(paper\s+"[^"]+"\)', content)
+                    if m_paper:
+                        insert_pos = m_paper.end()
+                        content = (
+                            content[:insert_pos]
+                            + f"\n  (lib_symbols\n    {formatted_def}\n  )"
+                            + content[insert_pos:]
+                        )
             except Exception:
-                resolved_ok = False
-            if not resolved_ok:
-                # Fallback: raw definition block (may reference `extends').
-                try:
-                    sym_def_str = extract_symbol_definition(lib_file, symbol_name)
-                    formatted_def = re.sub(r'^\(symbol\s+"([^"]+)"', f'(symbol "{full_lib_id}"', sym_def_str.strip())
-                    _inject_lib_def(formatted_def)
-                except Exception:
-                    pass
+                pass
 
     pin_blocks = []
     for p in sym_pins:
@@ -527,43 +500,6 @@ def add_wire_to_schematic(
     return wire_uuid
 
 
-def _append_block_to_sch(sch_path: str, block_sexp: str) -> None:
-    """Append one top-level S-expression block before the closing paren."""
-    with open(sch_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    last_paren = content.rfind(")")
-    if last_paren != -1:
-        new_content = content[:last_paren].rstrip() + "\n" + block_sexp + "\n)\n"
-    else:
-        new_content = content + "\n" + block_sexp + "\n)\n"
-
-    with open(sch_path, "w", encoding="utf-8") as f:
-        f.write(new_content)
-
-
-def add_junction_to_schematic(
-    sch_path: str,
-    pos_x_mm: float,
-    pos_y_mm: float,
-) -> str:
-    """Insert a junction dot into a KiCad schematic file.
-
-    Shape matches KiCad 10 output: (junction (at X Y) (diameter 0)
-    (color 0 0 0 0) (uuid ...)).
-    """
-    junction_uuid = str(uuid.uuid4())
-    junction_sexp = f"""  (junction
-    (at {pos_x_mm} {pos_y_mm})
-    (diameter 0)
-    (color 0 0 0 0)
-    (uuid "{junction_uuid}")
-  )"""
-
-    _append_block_to_sch(sch_path, junction_sexp)
-    return junction_uuid
-
-
 def add_label_to_schematic(
     sch_path: str,
     text: str,
@@ -572,35 +508,25 @@ def add_label_to_schematic(
     label_type: str = "local",
     rotation: float = 0,
 ) -> str:
-    """Insert a label into a KiCad schematic file.
-
-    label_type: 'local' -> (label ...), 'global' -> (global_label ... with
-    shape), 'hierarchical'/'hier' -> (hierarchical_label ... with shape).
-    """
-    kind = str(label_type or "local").lower()
-    if kind in ("global",):
-        tag = "global_label"
-    elif kind in ("hierarchical", "hier"):
-        tag = "hierarchical_label"
-    else:
-        tag = "label"
-
+    """Insert a schematic label into a KiCad S-expression file."""
+    tag = {
+        "global": "global_label",
+        "hierarchical": "hierarchical_label",
+        "hier": "hierarchical_label",
+    }.get(str(label_type).lower(), "label")
     label_uuid = str(uuid.uuid4())
-    if tag == "label":
-        label_sexp = f"""  (label "{text}"
-    (at {pos_x_mm} {pos_y_mm} {rotation})
+    shape = '\n    (shape input)' if tag != "label" else ""
+    block = f'''  ({tag} "{text}"
+    (at {pos_x_mm} {pos_y_mm} {rotation}){shape}
     (effects (font (size 1.27 1.27)) (justify left bottom))
     (uuid "{label_uuid}")
-  )"""
-    else:
-        label_sexp = f"""  ({tag} "{text}"
-    (at {pos_x_mm} {pos_y_mm} {rotation})
-    (shape input)
-    (effects (font (size 1.27 1.27)) (justify left bottom))
-    (uuid "{label_uuid}")
-  )"""
-
-    _append_block_to_sch(sch_path, label_sexp)
+  )'''
+    with open(sch_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    last_paren = content.rfind(")")
+    new_content = content[:last_paren].rstrip() + "\n" + block + "\n)\n"
+    with open(sch_path, "w", encoding="utf-8") as f:
+        f.write(new_content)
     return label_uuid
 
 
@@ -609,189 +535,19 @@ def add_bus_to_schematic(
     start: Tuple[float, float],
     end: Tuple[float, float],
 ) -> str:
-    """Insert a bus line into a KiCad schematic file via S-expression."""
+    """Insert a schematic bus into a KiCad S-expression file."""
     bus_uuid = str(uuid.uuid4())
-    bus_sexp = f"""  (bus
-    (pts
-      (xy {start[0]} {start[1]}) (xy {end[0]} {end[1]})
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
+    block = f'''  (bus
+    (pts (xy {start[0]} {start[1]}) (xy {end[0]} {end[1]}))
+    (stroke (width 0) (type default))
     (uuid "{bus_uuid}")
-  )"""
-
-    _append_block_to_sch(sch_path, bus_sexp)
+  )'''
+    with open(sch_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    last_paren = content.rfind(")")
+    with open(sch_path, "w", encoding="utf-8") as f:
+        f.write(content[:last_paren].rstrip() + "\n" + block + "\n)\n")
     return bus_uuid
-
-
-def _find_top_level_symbol_block(content: str, reference: str) -> Optional[Tuple[int, int, str]]:
-    """Locate a top-level (symbol ...) instance block by Reference property.
-
-    Top-level instances sit at paren depth 1 and carry (lib_id ...);
-    library definitions inside (lib_symbols ...) sit deeper and are skipped.
-
-    Returns (start, end, block_text) or None when not found.
-    """
-    # Find candidate block starts: "(symbol" at depth 1.
-    depth = 0
-    i = 0
-    n = len(content)
-    in_string = False
-    escape = False
-    candidates: List[int] = []
-    while i < n:
-        ch = content[i]
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-        else:
-            if ch == '"':
-                in_string = True
-            elif ch == "(":
-                if content.startswith("(symbol", i) and depth == 1:
-                    candidates.append(i)
-                depth += 1
-            elif ch == ")":
-                depth -= 1
-        i += 1
-
-    ref_pat = re.compile(
-        r'\(property\s+"Reference"\s+"' + re.escape(reference) + r'"'
-    )
-    for start in candidates:
-        # Walk to the matching close paren of this block.
-        depth = 0
-        j = start
-        in_string = False
-        escape = False
-        while j < n:
-            ch = content[j]
-            if in_string:
-                if escape:
-                    escape = False
-                elif ch == "\\":
-                    escape = True
-                elif ch == '"':
-                    in_string = False
-            else:
-                if ch == '"':
-                    in_string = True
-                elif ch == "(":
-                    depth += 1
-                elif ch == ")":
-                    depth -= 1
-                    if depth == 0:
-                        break
-            j += 1
-        block = content[start : j + 1]
-        if "(lib_id" not in block:
-            continue
-        if ref_pat.search(block):
-            return start, j + 1, block
-    return None
-
-
-def move_symbol_in_schematic(
-    sch_path: str,
-    reference: str,
-    pos_x_mm: float,
-    pos_y_mm: float,
-    rotation: Optional[float] = None,
-) -> str:
-    """Move a symbol instance to new coordinates (rewrites its (at ...) line).
-
-    Returns the symbol uuid. Raises FileNotFoundError / ValueError.
-    """
-    with open(sch_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    found = _find_top_level_symbol_block(content, reference)
-    if found is None:
-        raise ValueError(f"Symbol '{reference}' not found in {sch_path}")
-    start, end, block = found
-
-    at_pat = re.compile(r"\(at\s+([0-9.\-]+)\s+([0-9.\-]+)(?:\s+([0-9.\-]+))?\)")
-    m = at_pat.search(block)
-    if m is None:
-        raise ValueError(f"Symbol '{reference}' has no (at ...) entry")
-
-    if rotation is None:
-        rot_text = m.group(3) if m.group(3) is not None else "0"
-    else:
-        rot_text = str(rotation)
-    new_at = f"(at {pos_x_mm} {pos_y_mm} {rot_text})"
-    new_block = block[: m.start()] + new_at + block[m.end() :]
-
-    uuid_m = re.search(r'\(uuid\s+"([^"]+)"', new_block)
-    sym_uuid = uuid_m.group(1) if uuid_m else ""
-
-    with open(sch_path, "w", encoding="utf-8") as f:
-        f.write(content[:start] + new_block + content[end:])
-
-    return sym_uuid
-
-
-def rotate_symbol_in_schematic(
-    sch_path: str,
-    reference: str,
-    angle: float,
-) -> str:
-    """Rotate a symbol instance in place (keeps its position)."""
-    with open(sch_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    found = _find_top_level_symbol_block(content, reference)
-    if found is None:
-        raise ValueError(f"Symbol '{reference}' not found in {sch_path}")
-    start, end, block = found
-
-    at_pat = re.compile(r"\(at\s+([0-9.\-]+)\s+([0-9.\-]+)(?:\s+([0-9.\-]+))?\)")
-    m = at_pat.search(block)
-    if m is None:
-        raise ValueError(f"Symbol '{reference}' has no (at ...) entry")
-
-    new_at = f"(at {m.group(1)} {m.group(2)} {angle})"
-    new_block = block[: m.start()] + new_at + block[m.end() :]
-
-    uuid_m = re.search(r'\(uuid\s+"([^"]+)"', new_block)
-    sym_uuid = uuid_m.group(1) if uuid_m else ""
-
-    with open(sch_path, "w", encoding="utf-8") as f:
-        f.write(content[:start] + new_block + content[end:])
-
-    return sym_uuid
-
-
-def delete_symbol_from_schematic(sch_path: str, reference: str) -> bool:
-    """Remove a whole top-level symbol instance block by Reference.
-
-    Returns True when a block was removed. Raises ValueError when missing.
-    """
-    with open(sch_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    found = _find_top_level_symbol_block(content, reference)
-    if found is None:
-        raise ValueError(f"Symbol '{reference}' not found in {sch_path}")
-    start, end, _block = found
-
-    # Drop the block plus one surrounding newline to avoid blank buildup.
-    head = content[:start].rstrip("\n") + "\n"
-    tail = content[end:].lstrip("\n")
-    new_content = head + tail
-    if not new_content.endswith("\n"):
-        new_content += "\n"
-
-    with open(sch_path, "w", encoding="utf-8") as f:
-        f.write(new_content)
-
-    return True
 
 
 def extract_symbol_definition(sym_lib_path: str, symbol_name: str) -> str:
@@ -1023,24 +779,18 @@ class SexprBackend(KiCadBackend):
         elif domain == "schematic" and self.sch_filepath and os.path.exists(self.sch_filepath):
             with open(self.sch_filepath, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
-            try:
-                from ..schematic.sexpr_summary import summarize_schematic_text
-                summary = summarize_schematic_text(content)
-            except ValueError:
-                sym_refs = re.findall(r'\(property\s+"Reference"\s+"([^"]+)"', content)
-                symbols = [{"ref": r, "reference": r} for r in sym_refs]
-                return {"symbols": symbols, "symbol_count": len(symbols), "file": self.sch_filepath}
-            symbols = summary["symbols"]
-            for s in symbols:
-                s.setdefault("ref", s.get("reference", ""))
+            from ..schematic.sexpr_summary import summarize_schematic_text
+            summary = summarize_schematic_text(content)
+            sym_refs = re.findall(r'\(property\s+"Reference"\s+"([^"]+)"', content)
+            symbols = [{"ref": r, "reference": r} for r in sym_refs]
             return {
-                "symbols": symbols,
-                "symbol_count": len(symbols),
+                "components": symbols,
+                "symbols": summary["symbols"],
                 "wires": summary["wires"],
                 "junctions": summary["junctions"],
                 "labels": summary["labels"],
-                "sheets": summary["sheets"],
-                "unknown_blocks": summary["unknown_blocks"],
+                "component_count": len(symbols),
+                "symbol_count": len(symbols),
                 "file": self.sch_filepath,
             }
         return {}
@@ -1053,9 +803,10 @@ class SexprBackend(KiCadBackend):
             if action.action_type == ActionType.ADD_FOOTPRINT:
                 if not self.pcb_filepath:
                     raise AgentError(category=ErrorCategory.FILE_ERROR, message="No PCB file set for S-expr execution")
+                fp_id = p.get("footprint_id", p.get("footprint_name", p.get("lib_id", "Resistor_SMD:R_0402_1005Metric")))
                 fp_uuid = add_footprint_to_pcb(
                     pcb_path=self.pcb_filepath,
-                    footprint_id=p["footprint_id"],
+                    footprint_id=fp_id,
                     reference=p["reference"],
                     value=p.get("value", ""),
                     pos_x_mm=p["x"],
@@ -1217,6 +968,8 @@ class SexprBackend(KiCadBackend):
             elif action.action_type == ActionType.ADD_SYMBOL:
                 if not self.sch_filepath:
                     raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
+                if not os.path.exists(self.sch_filepath):
+                    KiCad10SchematicWriter(self.sch_filepath).save()
                 lib_id = p.get("lib_id", "")
                 lib_name, sym_name = lib_id.split(":", 1) if ":" in lib_id else ("", lib_id)
                 sym_uuid = add_symbol_to_schematic(
@@ -1240,6 +993,8 @@ class SexprBackend(KiCadBackend):
             elif action.action_type == ActionType.ADD_WIRE:
                 if not self.sch_filepath:
                     raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
+                if not os.path.exists(self.sch_filepath):
+                    KiCad10SchematicWriter(self.sch_filepath).save()
                 wire_uuid = add_wire_to_schematic(
                     sch_path=self.sch_filepath,
                     start=p["start"],
@@ -1253,19 +1008,11 @@ class SexprBackend(KiCadBackend):
                     backend_used=self.name,
                 )
 
-            elif action.action_type == ActionType.ADD_JUNCTION:
-                if not self.sch_filepath:
-                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
-                pos = p.get("position", (p.get("x", 0.0), p.get("y", 0.0)))
-                junction_uuid = add_junction_to_schematic(
-                    sch_path=self.sch_filepath,
-                    pos_x_mm=float(pos[0]),
-                    pos_y_mm=float(pos[1]),
-                )
+            elif action.action_type == ActionType.GET_SCHEMATIC_STATE:
                 return ActionResult(
                     action_id=action.action_id,
                     success=True,
-                    data={"uuid": junction_uuid},
+                    data=self.get_state("schematic"),
                     execution_time_ms=(time.time() - t0) * 1000,
                     backend_used=self.name,
                 )
@@ -1273,18 +1020,13 @@ class SexprBackend(KiCadBackend):
             elif action.action_type == ActionType.ADD_LABEL:
                 if not self.sch_filepath:
                     raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
-                pos = p.get("position", (p.get("x", 0.0), p.get("y", 0.0)))
                 label_uuid = add_label_to_schematic(
-                    sch_path=self.sch_filepath,
-                    text=str(p.get("text", "")),
-                    pos_x_mm=float(pos[0]),
-                    pos_y_mm=float(pos[1]),
-                    label_type=str(p.get("label_type", p.get("kind", "local"))),
-                    rotation=float(p.get("rotation", 0)),
+                    self.sch_filepath, str(p.get("text", "")),
+                    float(p.get("x", 0)), float(p.get("y", 0)),
+                    str(p.get("label_type", "local")), float(p.get("rotation", 0)),
                 )
                 return ActionResult(
-                    action_id=action.action_id,
-                    success=True,
+                    action_id=action.action_id, success=True,
                     data={"uuid": label_uuid},
                     execution_time_ms=(time.time() - t0) * 1000,
                     backend_used=self.name,
@@ -1294,87 +1036,11 @@ class SexprBackend(KiCadBackend):
                 if not self.sch_filepath:
                     raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
                 bus_uuid = add_bus_to_schematic(
-                    sch_path=self.sch_filepath,
-                    start=p["start"],
-                    end=p["end"],
+                    self.sch_filepath, tuple(p["start"]), tuple(p["end"])
                 )
                 return ActionResult(
-                    action_id=action.action_id,
-                    success=True,
+                    action_id=action.action_id, success=True,
                     data={"uuid": bus_uuid},
-                    execution_time_ms=(time.time() - t0) * 1000,
-                    backend_used=self.name,
-                )
-
-            elif action.action_type == ActionType.MOVE_SYMBOL:
-                if not self.sch_filepath:
-                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
-                ref = p.get("reference", p.get("ref", ""))
-                try:
-                    sym_uuid = move_symbol_in_schematic(
-                        sch_path=self.sch_filepath,
-                        reference=ref,
-                        pos_x_mm=float(p["x"]),
-                        pos_y_mm=float(p["y"]),
-                        rotation=p.get("rotation"),
-                    )
-                except ValueError as e:
-                    raise AgentError(
-                        category=ErrorCategory.MISSING_OBJECT,
-                        message=str(e),
-                        target_object=ref,
-                    ) from e
-                return ActionResult(
-                    action_id=action.action_id,
-                    success=True,
-                    data={"uuid": sym_uuid, "reference": ref},
-                    execution_time_ms=(time.time() - t0) * 1000,
-                    backend_used=self.name,
-                )
-
-            elif action.action_type == ActionType.ROTATE_SYMBOL:
-                if not self.sch_filepath:
-                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
-                ref = p.get("reference", p.get("ref", ""))
-                try:
-                    sym_uuid = rotate_symbol_in_schematic(
-                        sch_path=self.sch_filepath,
-                        reference=ref,
-                        angle=float(p.get("angle", p.get("rotation", 90))),
-                    )
-                except ValueError as e:
-                    raise AgentError(
-                        category=ErrorCategory.MISSING_OBJECT,
-                        message=str(e),
-                        target_object=ref,
-                    ) from e
-                return ActionResult(
-                    action_id=action.action_id,
-                    success=True,
-                    data={"uuid": sym_uuid, "reference": ref},
-                    execution_time_ms=(time.time() - t0) * 1000,
-                    backend_used=self.name,
-                )
-
-            elif action.action_type == ActionType.DELETE_SYMBOL:
-                if not self.sch_filepath:
-                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
-                ref = p.get("reference", p.get("ref", p.get("id", "")))
-                try:
-                    delete_symbol_from_schematic(
-                        sch_path=self.sch_filepath,
-                        reference=ref,
-                    )
-                except ValueError as e:
-                    raise AgentError(
-                        category=ErrorCategory.MISSING_OBJECT,
-                        message=str(e),
-                        target_object=ref,
-                    ) from e
-                return ActionResult(
-                    action_id=action.action_id,
-                    success=True,
-                    data={"reference": ref, "removed": True},
                     execution_time_ms=(time.time() - t0) * 1000,
                     backend_used=self.name,
                 )

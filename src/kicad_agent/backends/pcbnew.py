@@ -203,6 +203,11 @@ class PcbnewBackend(KiCadBackend):
                     return fp
         return None
 
+    def find_footprint(self, ref: str) -> Optional[Any]:
+        """Find a footprint on the board by reference designator."""
+        board = self._get_board()
+        return self._find_footprint(board, ref)
+
     def execute(self, action: Action) -> ActionResult:
         t0 = time.time()
         p = action.parameters
@@ -255,34 +260,46 @@ class PcbnewBackend(KiCadBackend):
                     backend_used=self.name,
                 )
 
-            elif t == ActionType.ADD_FOOTPRINT:
+            elif t in (ActionType.ADD_FOOTPRINT, ActionType.ADD_SYMBOL):
                 ref = p.get("reference", p.get("ref"))
                 val = p.get("value", "")
                 x = float(p.get("x", 0))
                 y = float(p.get("y", 0))
                 rotation = float(p.get("rotation", 0))
-                comp_type = p.get("component_type", "resistor")
-                footprint_lib = p.get("footprint_lib", p.get("library"))
-                footprint_name = p.get("footprint_name")
+                comp_type = p.get("component_type", "")
+                if not comp_type:
+                    if ref and ref[0].upper() == "D":
+                        comp_type = "led"
+                    elif ref and ref[0].upper() == "C":
+                        comp_type = "capacitor"
+                    elif ref and ref[0].upper() == "U":
+                        comp_type = "ic"
+                    else:
+                        comp_type = "resistor"
+                footprint_lib = p.get("footprint_lib", p.get("library", p.get("lib_id")))
 
-                existing = [fp.GetReference() for fp in board.GetFootprints()] if hasattr(board, "GetFootprints") else []
-                if ref in existing:
+                # Check duplicate
+                if self.find_footprint(ref):
                     raise AgentError(
                         category=ErrorCategory.PLACEMENT_ERROR,
                         message=f"{ref} already exists on the board",
                         target_object=ref,
                     )
 
-                if not footprint_lib or not footprint_name:
-                    if footprint_lib and ":" in footprint_lib:
-                        parts = footprint_lib.split(":", 1)
-                        footprint_lib, footprint_name = parts[0] + ".pretty", parts[1]
-                    elif comp_type in FOOTPRINT_MAP:
+                if not footprint_lib:
+                    if comp_type in FOOTPRINT_MAP:
                         footprint_lib, footprint_name = FOOTPRINT_MAP[comp_type]
                     else:
                         footprint_lib, footprint_name = "Resistor_SMD.pretty", "R_0402_1005Metric"
+                else:
+                    footprint_name = p.get("footprint_name", "R_0402_1005Metric")
 
-                is_mock = getattr(self._pcbnew, "__name__", "") == "tests.mock_pcbnew" or "mock" in getattr(self._pcbnew, "__file__", "")
+                is_mock = (
+                    hasattr(self._pcbnew, "MockBoard")
+                    or hasattr(self._pcbnew, "MockFootprint")
+                    or "mock" in getattr(self._pcbnew, "__name__", "").lower()
+                    or "mock" in str(self._pcbnew).lower()
+                )
                 if is_mock:
                     actual_name = footprint_name or "R_0402_1005Metric"
                     lib_path = "mock_lib"
@@ -322,13 +339,13 @@ class PcbnewBackend(KiCadBackend):
                     backend_used=self.name,
                 )
 
-            elif t == ActionType.MOVE_FOOTPRINT:
+            elif t in (ActionType.MOVE_FOOTPRINT, ActionType.MOVE_SYMBOL):
                 ref = p.get("reference", p.get("ref"))
                 x = float(p.get("x", 0))
                 y = float(p.get("y", 0))
                 rotation = p.get("rotation")
 
-                fp = self._find_footprint(board, ref)
+                fp = self.find_footprint(ref)
                 if not fp:
                     raise AgentError(
                         category=ErrorCategory.MISSING_OBJECT,
@@ -349,11 +366,11 @@ class PcbnewBackend(KiCadBackend):
                     backend_used=self.name,
                 )
 
-            elif t == ActionType.ROTATE_FOOTPRINT:
+            elif t in (ActionType.ROTATE_FOOTPRINT, ActionType.ROTATE_SYMBOL):
                 ref = p.get("reference", p.get("ref"))
                 angle = float(p.get("angle", p.get("rotation", 90)))
 
-                fp = self._find_footprint(board, ref)
+                fp = self.find_footprint(ref)
                 if not fp:
                     raise AgentError(
                         category=ErrorCategory.MISSING_OBJECT,
@@ -362,19 +379,20 @@ class PcbnewBackend(KiCadBackend):
                     )
 
                 if hasattr(fp, "SetOrientationDegrees"):
-                    fp.SetOrientationDegrees(angle)
+                    current_angle = getattr(fp, "GetOrientationDegrees", lambda: 0)()
+                    fp.SetOrientationDegrees(current_angle + angle)
 
                 return ActionResult(
                     action_id=action.action_id,
                     success=True,
-                    data={"reference": ref, "rotation": angle},
+                    data={"reference": ref, "angle": angle},
                     execution_time_ms=(time.time() - t0) * 1000,
                     backend_used=self.name,
                 )
 
-            elif t in (ActionType.REMOVE_FOOTPRINT, ActionType.DELETE_FOOTPRINT):
+            elif t in (ActionType.REMOVE_FOOTPRINT, ActionType.DELETE_FOOTPRINT, ActionType.DELETE_SYMBOL):
                 ref = p.get("reference", p.get("ref"))
-                fp = self._find_footprint(board, ref)
+                fp = self.find_footprint(ref)
                 if not fp:
                     raise AgentError(
                         category=ErrorCategory.MISSING_OBJECT,
@@ -395,9 +413,17 @@ class PcbnewBackend(KiCadBackend):
                     backend_used=self.name,
                 )
 
-            elif t == ActionType.ADD_TRACK:
-                x1, y1 = p.get("start", (p.get("x1", 0), p.get("y1", 0)))
-                x2, y2 = p.get("end", (p.get("x2", 0), p.get("y2", 0)))
+            elif t in (ActionType.ADD_TRACK, ActionType.ADD_WIRE):
+                start_p = p.get("start")
+                end_p = p.get("end")
+                if start_p:
+                    x1, y1 = start_p[0], start_p[1]
+                else:
+                    x1, y1 = p.get("x1", 0), p.get("y1", 0)
+                if end_p:
+                    x2, y2 = end_p[0], end_p[1]
+                else:
+                    x2, y2 = p.get("x2", 0), p.get("y2", 0)
                 width_mm = float(p.get("width_mm", 0.25))
 
                 if hasattr(self._pcbnew, "PCB_TRACK"):
