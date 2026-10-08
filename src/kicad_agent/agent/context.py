@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from ..core.session import AgentSession, SessionMessage
+
 
 @dataclass
 class DesignConstraints:
@@ -23,3 +25,10 @@ class AgentContext:
     constraints: DesignConstraints = field(default_factory=DesignConstraints)
     user_preferences: Dict[str, Any] = field(default_factory=dict)
     conversation_history: List[Dict[str, Any]] = field(default_factory=list)
+    session: AgentSession = field(default_factory=AgentSession)
+
+    def append_message(self, message: SessionMessage) -> SessionMessage:
+        """Persist a normalized message and retain legacy history compatibility."""
+        self.session.append(message)
+        self.conversation_history.append(message.to_dict())
+        return message

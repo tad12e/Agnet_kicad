@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from ..core.actions import Action
 from ..core.plans import Plan
 from ..core.results import ActionResult, VerificationResult
+from ..core.session import AgentSession
 from ..pcb.state import PCBState
 from ..schematic.state import SchematicState
 
@@ -37,3 +38,4 @@ class AgentState:
     schematic_state: Optional[SchematicState] = None
     iteration_count: int = 0
     max_iterations: int = 5
+    session: AgentSession = field(default_factory=AgentSession)
