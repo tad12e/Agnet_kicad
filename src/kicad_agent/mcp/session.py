@@ -22,6 +22,7 @@ from ..backends.ipc import IPCBackend
 from ..backends.ipc_pcb import IPCPCBBackend
 from ..backends.sexpr import SexprBackend
 from ..core.actions import Action, ActionDomain, ActionType
+from ..providers.llm import LLMProvider
 
 SCHEMATIC_TOOL_NAMES = frozenset(
     t["name"] for t in SCHEMATIC_READ_SCHEMA + SCHEMATIC_WRITE_SCHEMA
@@ -74,12 +75,69 @@ SESSION_TOOLS_SCHEMA = [
             "properties": {},
         },
     },
+    {
+        "name": "start_llm_task",
+        "description": "Start an iterative LLM-driven KiCad task and return its session, trace, and current status.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "Plain-English KiCad task"},
+                "domain": {"type": "string", "description": "'schematic' or 'pcb'"},
+                "max_steps": {"type": "integer", "description": "Maximum provider/tool turns"},
+            },
+            "required": ["task"],
+        },
+    },
+    {
+        "name": "llm_session_info",
+        "description": "Inspect the active iterative LLM task session.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "resolve_llm_approval",
+        "description": "Approve or deny the pending high-risk LLM tool call and continue the same session.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "approved": {"type": "boolean"},
+            },
+            "required": ["approved"],
+        },
+    },
+    {
+        "name": "cancel_llm_task",
+        "description": "Request cooperative cancellation of the active iterative LLM task.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "save_llm_session",
+        "description": "Persist the active iterative LLM conversation to a JSON snapshot.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "load_llm_session",
+        "description": "Restore an iterative LLM conversation from a JSON snapshot.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "domain": {"type": "string"},
+            },
+            "required": ["path"],
+        },
+    },
 ]
 
 TIER2_TOOLS_SCHEMA = [
     {
         "name": "run_design_task",
-        "description": "Give the built-in agent a whole design job in plain English (e.g. 'add a power LED with a 1k series resistor'). The agent plans, executes, verifies, and repairs on its own. Requires an Anthropic API key on the server.",
+        "description": "Give the iterative LLM agent a whole design job in plain English (e.g. 'add a power LED with a 1k series resistor'). It can inspect, act, verify, recover, and pause for approval.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -112,7 +170,12 @@ def _ipc_socket_present(socket_path: Optional[str] = None) -> bool:
 class MCPSession:
     """Backend handles, open documents, and tool routing for the server."""
 
-    def __init__(self, mode: str = "sexpr", socket_path: Optional[str] = None):
+    def __init__(
+        self,
+        mode: str = "sexpr",
+        socket_path: Optional[str] = None,
+        provider: Optional[LLMProvider] = None,
+    ):
         """mode: 'sexpr' (files only), 'ipc' (live lanes with file fallback),
         'auto' (live lanes when KiCad's socket exists, else files only)."""
         self.mode = mode
@@ -137,6 +200,126 @@ class MCPSession:
 
         self.sch_tools = ToolRegistry(self.sch_backend)
         self.pcb_tools = ToolRegistry(self.pcb_backend)
+        self.llm_agent = None
+        self.llm_domain: Optional[str] = None
+        self.llm_provider = provider
+
+    def _new_llm_agent(self, backend: KiCadBackend):
+        from ..agent.agent import KiCadAgent
+        from ..providers.factory import configured_provider
+
+        provider = self.llm_provider
+        if provider is None:
+            provider = configured_provider()
+            if provider is None:
+                raise RuntimeError(
+                    "No LLM provider configured and ANTHROPIC_API_KEY is unset."
+                )
+        return KiCadAgent(backend=backend, provider=provider)
+
+    def _llm_backend(self, domain: str) -> KiCadBackend:
+        if domain == "schematic":
+            if not self.sch_path:
+                raise ValueError("No schematic open. Call open_schematic first.")
+            return self.sch_backend
+        if domain == "pcb":
+            if not self.pcb_path:
+                raise ValueError("No board open. Call open_pcb first.")
+            return self.pcb_backend
+        raise ValueError("Domain must be 'schematic' or 'pcb'.")
+
+    def start_llm_task(
+        self,
+        task: str,
+        domain: str = "schematic",
+        max_steps: int = 20,
+    ) -> Dict[str, Any]:
+        if not task.strip():
+            return {"status": "error", "code": "MISSING_ARGUMENT",
+                    "message": "start_llm_task requires a non-empty 'task'"}
+        domain = (domain or "schematic").lower()
+        try:
+            backend = self._llm_backend(domain)
+            self.llm_agent = self._new_llm_agent(backend)
+            self.llm_domain = domain
+            return self.llm_agent.run_llm(task, domain=domain, max_steps=max_steps)
+        except RuntimeError as exc:
+            return {"status": "error", "code": "NO_PROVIDER",
+                    "message": str(exc)}
+        except (ValueError, TypeError) as exc:
+            return {"status": "error", "code": "BAD_REQUEST", "message": str(exc)}
+        except Exception as exc:
+            return {"status": "error", "code": "AGENT_FAILED",
+                    "message": f"LLM task failed: {exc}"}
+
+    def llm_session_info(self) -> Dict[str, Any]:
+        if self.llm_agent is None:
+            return {"status": "error", "code": "NO_ACTIVE_LLM_SESSION",
+                    "message": "No iterative LLM task is active."}
+        session = self.llm_agent.state.session
+        return {
+            "status": "success",
+            "session_id": session.session_id,
+            "domain": session.domain,
+            "session_status": session.status,
+            "message_count": len(session.messages),
+            "metadata": session.metadata,
+        }
+
+    def resolve_llm_approval(self, approved: bool) -> Dict[str, Any]:
+        if self.llm_agent is None:
+            return {"status": "error", "code": "NO_ACTIVE_LLM_SESSION",
+                    "message": "No iterative LLM task is active."}
+        try:
+            return self.llm_agent.resolve_llm_approval(approved)
+        except ValueError as exc:
+            return {"status": "error", "code": "BAD_SESSION_STATE",
+                    "message": str(exc)}
+
+    def cancel_llm_task(self) -> Dict[str, Any]:
+        if self.llm_agent is None:
+            return {"status": "error", "code": "NO_ACTIVE_LLM_SESSION",
+                    "message": "No iterative LLM task is active."}
+        try:
+            return self.llm_agent.cancel_llm()
+        except ValueError as exc:
+            return {"status": "error", "code": "BAD_SESSION_STATE",
+                    "message": str(exc)}
+
+    def save_llm_session(self, path: str) -> Dict[str, Any]:
+        if self.llm_agent is None:
+            return {"status": "error", "code": "NO_ACTIVE_LLM_SESSION",
+                    "message": "No iterative LLM task is active."}
+        if not path:
+            return {"status": "error", "code": "MISSING_ARGUMENT",
+                    "message": "save_llm_session requires 'path'"}
+        try:
+            saved = self.llm_agent.save_llm_session(path)
+            return {"status": "success", "path": saved,
+                    "session_id": self.llm_agent.state.session.session_id}
+        except Exception as exc:
+            return {"status": "error", "code": "SESSION_SAVE_FAILED",
+                    "message": str(exc)}
+
+    def load_llm_session(self, path: str, domain: str = "schematic") -> Dict[str, Any]:
+        if not path:
+            return {"status": "error", "code": "MISSING_ARGUMENT",
+                    "message": "load_llm_session requires 'path'"}
+        domain = (domain or "schematic").lower()
+        try:
+            backend = self._llm_backend(domain)
+            self.llm_agent = self._new_llm_agent(backend)
+            self.llm_domain = domain
+            session = self.llm_agent.load_llm_session(path)
+            return {"status": "success", "session": session.to_dict()}
+        except RuntimeError as exc:
+            return {"status": "error", "code": "NO_PROVIDER",
+                    "message": str(exc)}
+        except (ValueError, TypeError) as exc:
+            return {"status": "error", "code": "BAD_REQUEST", "message": str(exc)}
+        except Exception as exc:
+            return {"status": "error", "code": "SESSION_LOAD_FAILED",
+                    "message": str(exc)}
 
     # -- documents ------------------------------------------------------
 
@@ -243,6 +426,28 @@ class MCPSession:
             return self.save_pcb()
         if tool_name == "session_info":
             return self.session_info()
+        if tool_name == "start_llm_task":
+            return self.start_llm_task(
+                str(args.get("task", "") or ""),
+                str(args.get("domain", "schematic") or "schematic"),
+                int(args.get("max_steps", 20) or 20),
+            )
+        if tool_name == "llm_session_info":
+            return self.llm_session_info()
+        if tool_name == "resolve_llm_approval":
+            if "approved" not in args:
+                return {"status": "error", "code": "MISSING_ARGUMENT",
+                        "message": "resolve_llm_approval requires 'approved'"}
+            return self.resolve_llm_approval(bool(args["approved"]))
+        if tool_name == "cancel_llm_task":
+            return self.cancel_llm_task()
+        if tool_name == "save_llm_session":
+            return self.save_llm_session(str(args.get("path", "") or ""))
+        if tool_name == "load_llm_session":
+            return self.load_llm_session(
+                str(args.get("path", "") or ""),
+                str(args.get("domain", "schematic") or "schematic"),
+            )
         if tool_name == "run_design_task":
             from .tier2 import run_design_task
 

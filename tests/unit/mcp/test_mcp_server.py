@@ -11,6 +11,7 @@ import shutil
 from kicad_agent.agent.tools import ALL_TOOLS_SCHEMA
 from kicad_agent.mcp.server import all_tool_definitions
 from kicad_agent.mcp.session import MCPSession
+from kicad_agent.providers.llm import LLMProvider
 
 
 def _fresh_session():
@@ -19,12 +20,14 @@ def _fresh_session():
 
 def test_mcp_tool_schemas_complete():
     tools = all_tool_definitions()
-    assert len(tools) == 36  # 5 session + 1 tier2 + 18 pcb + 12 schematic
+    assert len(tools) == 42  # 11 session + 1 tier2 + 18 pcb + 12 schematic
     assert len(ALL_TOOLS_SCHEMA) == 30
     names = [t["name"] for t in tools]
     for expected in (
         "open_schematic", "open_pcb", "save_schematic", "save_pcb",
         "session_info", "run_design_task",
+        "start_llm_task", "llm_session_info", "resolve_llm_approval",
+        "cancel_llm_task", "save_llm_session", "load_llm_session",
         "get_schematic_state", "get_symbol_pins", "search_symbols",
         "verify_schematic_connectivity",
         "add_symbol", "add_wire", "add_junction", "add_label",
@@ -43,6 +46,7 @@ def test_mcp_tool_schemas_complete():
     assert by_name["add_wire"]["input_schema"]["required"] == ["start", "end"]
     assert by_name["open_schematic"]["input_schema"]["required"] == ["path"]
     assert by_name["run_design_task"]["input_schema"]["required"] == ["task"]
+    assert by_name["start_llm_task"]["input_schema"]["required"] == ["task"]
 
 
 def test_mcp_session_info():
@@ -124,7 +128,65 @@ def test_mcp_tier2_guards():
     assert out["code"] == "NO_API_KEY"
 
 
+def test_mcp_tier2_uses_iterative_provider(sample_sch_file, tmp_path):
+    class Provider(LLMProvider):
+        def generate_response(self, messages, tools=None, system_prompt="", model=None):
+            return {"content": "Task complete."}
+
+    scratch = os.path.join(tmp_path, "scratch.kicad_sch")
+    shutil.copyfile(sample_sch_file, scratch)
+    session = MCPSession(mode="sexpr", provider=Provider())
+    assert session.dispatch("open_schematic", {"path": scratch})["status"] == "success"
+
+    result = session.dispatch(
+        "run_design_task",
+        {"task": "Inspect the schematic", "domain": "schematic"},
+    )
+
+    assert result["status"] == "success"
+    assert result["result"]["status"] == "completed"
+    assert session.llm_agent is not None
+
+
 def test_mcp_unknown_tool():
     out = _fresh_session().dispatch("frobnicate", {})
     assert out["status"] == "error"
     assert "frobnicate" in out["message"]
+
+
+def test_mcp_llm_session_lifecycle_guards_without_active_session():
+    session = _fresh_session()
+
+    info = session.dispatch("llm_session_info", {})
+    assert info["code"] == "NO_ACTIVE_LLM_SESSION"
+
+    approval = session.dispatch("resolve_llm_approval", {"approved": True})
+    assert approval["code"] == "NO_ACTIVE_LLM_SESSION"
+
+    cancelled = session.dispatch("cancel_llm_task", {})
+    assert cancelled["code"] == "NO_ACTIVE_LLM_SESSION"
+
+    saved = session.dispatch("save_llm_session", {"path": "session.json"})
+    assert saved["code"] == "NO_ACTIVE_LLM_SESSION"
+
+    loaded = session.dispatch("load_llm_session", {})
+    assert loaded["code"] == "MISSING_ARGUMENT"
+
+
+def test_mcp_llm_task_accepts_injected_provider(sample_sch_file, tmp_path):
+    class Provider(LLMProvider):
+        def generate_response(self, messages, tools=None, system_prompt="", model=None):
+            return {"content": "Inspection complete."}
+
+    scratch = os.path.join(tmp_path, "scratch.kicad_sch")
+    shutil.copyfile(sample_sch_file, scratch)
+    session = MCPSession(mode="sexpr", provider=Provider())
+    assert session.dispatch("open_schematic", {"path": scratch})["status"] == "success"
+
+    result = session.dispatch(
+        "start_llm_task",
+        {"task": "Inspect the schematic", "domain": "schematic"},
+    )
+
+    assert result["status"] == "completed"
+    assert session.llm_agent is not None
