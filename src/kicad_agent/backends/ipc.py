@@ -645,6 +645,24 @@ class IPCBackend(KiCadBackend):
     def _execute_fallback(self, action: Action, t0: float, ipc_error: AgentError) -> ActionResult:
         """Delegate to the fallback backend, marking the result honestly."""
         assert self.fallback is not None
+        if action.action_type == ActionType.ADD_JUNCTION:
+            return ActionResult(
+                action_id=action.action_id,
+                success=False,
+                error=AgentError(
+                    category=ErrorCategory.INVALID_ACTION,
+                    message=(
+                        f"IPC failed ({ipc_error.message}) and fallback "
+                        f"{self.fallback.name} does not support live junction writes."
+                    ),
+                ),
+                data={
+                    "fallback_used": True,
+                    "ipc_error": ipc_error.message,
+                },
+                execution_time_ms=(time.time() - t0) * 1000,
+                backend_used=f"ipc->{self.fallback.name}",
+            )
         try:
             result = self.fallback.execute(action)
         except Exception as e:
