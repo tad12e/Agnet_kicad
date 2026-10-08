@@ -10,6 +10,8 @@ from __future__ import annotations
 import copy
 import os
 import re
+import shutil
+import tempfile
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -750,6 +752,44 @@ class SexprBackend(KiCadBackend):
 
     def save_schematic(self, filepath: Optional[str] = None) -> bool:
         return True
+
+    def create_checkpoint(self, domain: str = "pcb") -> Dict[str, Any]:
+        filepath = self.pcb_filepath if domain == "pcb" else self.sch_filepath
+        if not filepath or not os.path.exists(filepath):
+            return {
+                "domain": domain,
+                "rollback_supported": False,
+                "reason": "No active file is available for checkpointing.",
+            }
+        fd, backup = tempfile.mkstemp(
+            prefix=".kicad-agent-checkpoint-",
+            suffix=os.path.splitext(filepath)[1],
+        )
+        os.close(fd)
+        shutil.copy2(filepath, backup)
+        return {
+            "domain": domain,
+            "filepath": filepath,
+            "backup_path": backup,
+            "rollback_supported": True,
+        }
+
+    def restore_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        if not checkpoint.get("rollback_supported"):
+            raise RuntimeError(checkpoint.get("reason", "Rollback unsupported."))
+        shutil.copy2(checkpoint["backup_path"], checkpoint["filepath"])
+        try:
+            os.unlink(checkpoint["backup_path"])
+        except OSError:
+            pass
+
+    def discard_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        backup = checkpoint.get("backup_path")
+        if backup:
+            try:
+                os.unlink(backup)
+            except OSError:
+                pass
 
     def get_state(self, domain: str = "pcb") -> Dict[str, Any]:
         if domain == "pcb" and self.pcb_filepath and os.path.exists(self.pcb_filepath):

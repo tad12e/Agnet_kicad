@@ -1,103 +1,92 @@
-"""Explicit permission policy for actions crossing the runtime boundary."""
+"""Permission and risk policy for model-selected tools."""
 
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Dict, Optional, Union
 
 from .actions import Action, ActionType
 from .contracts import PermissionDecision, PermissionRequest
 
 
-DESTRUCTIVE_ACTIONS = frozenset(
-    {
-        ActionType.DELETE_SYMBOL,
-        ActionType.REMOVE_FOOTPRINT,
-        ActionType.DELETE_FOOTPRINT,
-        ActionType.REMOVE_TRACK,
-        ActionType.UNDO_ACTION,
-        ActionType.LOAD_DOCUMENT,
-        ActionType.LOAD_BOARD,
-        ActionType.SAVE_DOCUMENT,
-        ActionType.SAVE_BOARD,
-        ActionType.CREATE_BOARD,
-        ActionType.MODIFY_BOARD_OUTLINE,
-    }
-)
-
-HIGH_RISK_ACTIONS = frozenset(
-    {
-        ActionType.ADD_TRACK,
-        ActionType.ROUTE_TRACK,
-        ActionType.ADD_VIA,
-        ActionType.CREATE_ZONE,
-        ActionType.ADD_ZONE,
-        ActionType.FILL_ZONE,
-        ActionType.CREATE_BOARD_OUTLINE,
-    }
-)
+class ToolRisk(str, enum.Enum):
+    READ = "read"
+    LOW = "low"
+    HIGH = "high"
+    CRITICAL = "critical"
 
 
 @dataclass(frozen=True)
-class PermissionCheck:
-    """Decision and optional approval request for one action."""
-
-    decision: PermissionDecision
-    request: Optional[PermissionRequest] = None
-
-
 class PermissionPolicy:
-    """Deterministic default-deny boundary for destructive operations.
+    """Deterministic default policy applied before backend mutation."""
 
-    Ordinary inspection and design construction retain the existing behavior.
-    Destructive and high-risk operations require an explicit approval, while
-    callers may opt into stricter policies for all mutations.
-    """
+    ask_above: ToolRisk = ToolRisk.HIGH
+    deny_critical: bool = True
 
-    def __init__(
+    def decide(
         self,
-        require_approval_for_high_risk: bool = True,
-        require_approval_for_destructive: bool = True,
-        require_approval_for_mutations: bool = False,
-    ):
-        self.require_approval_for_high_risk = require_approval_for_high_risk
-        self.require_approval_for_destructive = require_approval_for_destructive
-        self.require_approval_for_mutations = require_approval_for_mutations
+        target: Union[ToolRisk, Action],
+        approval: Optional[PermissionDecision] = None,
+    ) -> Union[PermissionDecision, "PermissionResult"]:
+        if isinstance(target, Action):
+            risk = self._action_risk(target)
+            decision = self.decide(risk)
+            if approval is not None:
+                decision = approval
+            request = None
+            if decision is not PermissionDecision.ALLOW:
+                request = PermissionRequest(
+                    action=target,
+                    reason=f"Action '{target.action_type.value}' requires permission.",
+                    risk="destructive" if risk is ToolRisk.HIGH else risk.value,
+                    decision=decision,
+                )
+            return PermissionResult(decision=decision, request=request)
+        risk = target
+        if risk is ToolRisk.CRITICAL and self.deny_critical:
+            return PermissionDecision.DENY
+        order = {
+            ToolRisk.READ: 0,
+            ToolRisk.LOW: 1,
+            ToolRisk.HIGH: 2,
+            ToolRisk.CRITICAL: 3,
+        }
+        if order[risk] >= order[self.ask_above]:
+            return PermissionDecision.ASK
+        return PermissionDecision.ALLOW
 
-    def risk_for(self, action: Action) -> str:
-        if action.action_type in DESTRUCTIVE_ACTIONS:
-            return "destructive"
-        if action.action_type in HIGH_RISK_ACTIONS:
-            return "high"
-        if action.action_type.value.startswith(("add_", "move_", "rotate_", "modify_")):
-            return "medium"
-        return "low"
+    @staticmethod
+    def _action_risk(action: Action) -> ToolRisk:
+        if action.action_type in {
+            ActionType.DELETE_SYMBOL,
+            ActionType.REMOVE_FOOTPRINT,
+            ActionType.DELETE_FOOTPRINT,
+        }:
+            return ToolRisk.HIGH
+        if action.action_type is ActionType.CREATE_BOARD:
+            return ToolRisk.CRITICAL
+        return ToolRisk.LOW
 
-    def check(self, action: Action) -> PermissionCheck:
-        risk = self.risk_for(action)
-        needs_approval = (
-            (risk == "destructive" and self.require_approval_for_destructive)
-            or (risk == "high" and self.require_approval_for_high_risk)
-            or (
-                risk in {"medium", "high", "destructive"}
-                and self.require_approval_for_mutations
-            )
-        )
-        if not needs_approval:
-            return PermissionCheck(PermissionDecision.ALLOW)
-        request = PermissionRequest(
-            action=action,
-            reason=f"{risk.capitalize()} action requires explicit approval.",
-            risk=risk,
-        )
-        return PermissionCheck(PermissionDecision.ASK, request)
+    def check(self, action: Action) -> "PermissionResult":
+        """Return the structured action-level permission result."""
+        return self.decide(action)
 
-    def decide(self, action: Action, approval: Optional[PermissionDecision] = None) -> PermissionCheck:
-        check = self.check(action)
-        if check.decision is not PermissionDecision.ASK or approval is None:
-            return check
-        if approval is PermissionDecision.ALLOW:
-            return PermissionCheck(PermissionDecision.ALLOW, check.request)
-        if approval is PermissionDecision.DENY:
-            return PermissionCheck(PermissionDecision.DENY, check.request)
-        return check
+
+@dataclass(frozen=True)
+class PermissionResult:
+    decision: PermissionDecision
+    request: Optional[PermissionRequest]
+
+
+TOOL_RISKS: Dict[str, ToolRisk] = {
+    "remove_footprint": ToolRisk.HIGH,
+    "delete_symbol": ToolRisk.HIGH,
+    "add_track": ToolRisk.HIGH,
+    "add_via": ToolRisk.HIGH,
+    "create_zone": ToolRisk.HIGH,
+    "load_board": ToolRisk.HIGH,
+    "save_board": ToolRisk.HIGH,
+    "create_board": ToolRisk.CRITICAL,
+    "read": ToolRisk.READ,
+}

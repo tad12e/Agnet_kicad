@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ..tasks.task import Task
+from ..core.session import AgentSession, SessionMessage
 
 
 @dataclass
@@ -82,6 +83,12 @@ class AgentContext:
     plan_summary: Dict[str, Any] = field(default_factory=dict)
     iteration_count: int = 0
     max_iterations: int = 20
+    session: AgentSession = field(default_factory=AgentSession)
+
+    def append_message(self, message: SessionMessage) -> SessionMessage:
+        self.session.append(message)
+        self.conversation_history.append(message.to_dict())
+        return message
 
     def to_model_context(self, limit: int = 5) -> ModelContext:
         """Build a bounded, provider-neutral context for model decision making."""

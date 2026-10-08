@@ -9,7 +9,6 @@ and routes every tool call to the right ToolRegistry.
 from __future__ import annotations
 
 import os
-import uuid
 from typing import Any, Dict, Optional
 
 from ..agent.tools import (
@@ -23,14 +22,7 @@ from ..backends.ipc import IPCBackend
 from ..backends.ipc_pcb import IPCPCBBackend
 from ..backends.sexpr import SexprBackend
 from ..core.actions import Action, ActionDomain, ActionType
-from ..core.contracts import PermissionDecision, PermissionRequest, SessionStatus
-from ..core.permissions import PermissionPolicy
-from ..core.session_snapshot import (
-    RESUMABLE_STATUSES,
-    SessionSnapshot,
-    SessionSnapshotStore,
-    SnapshotError,
-)
+from ..providers.llm import LLMProvider
 
 SCHEMATIC_TOOL_NAMES = frozenset(
     t["name"] for t in SCHEMATIC_READ_SCHEMA + SCHEMATIC_WRITE_SCHEMA
@@ -84,45 +76,68 @@ SESSION_TOOLS_SCHEMA = [
         },
     },
     {
-        "name": "save_session",
-            "description": "Write a versioned, checksummed session snapshot to a JSON file.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Snapshot JSON path"},
-                },
-                "required": ["path"],
+        "name": "start_llm_task",
+        "description": "Start an iterative LLM-driven KiCad task and return its session, trace, and current status.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "Plain-English KiCad task"},
+                "domain": {"type": "string", "description": "'schematic' or 'pcb'"},
+                "max_steps": {"type": "integer", "description": "Maximum provider/tool turns"},
             },
+            "required": ["task"],
+        },
     },
     {
-            "name": "resume_session",
-            "description": "Validate and resume a non-terminal session snapshot from a JSON file.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Snapshot JSON path"},
-                },
-                "required": ["path"],
-            },
+        "name": "llm_session_info",
+        "description": "Inspect the active iterative LLM task session.",
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
-        "name": "approve_action",
-            "description": "Approve or deny a pending risky action returned by a previous tool call.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "request_id": {"type": "string"},
-                    "decision": {"type": "string", "enum": ["allow", "deny"]},
-                },
-                "required": ["request_id", "decision"],
+        "name": "resolve_llm_approval",
+        "description": "Approve or deny the pending high-risk LLM tool call and continue the same session.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "approved": {"type": "boolean"},
             },
+            "required": ["approved"],
+        },
+    },
+    {
+        "name": "cancel_llm_task",
+        "description": "Request cooperative cancellation of the active iterative LLM task.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "save_llm_session",
+        "description": "Persist the active iterative LLM conversation to a JSON snapshot.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "load_llm_session",
+        "description": "Restore an iterative LLM conversation from a JSON snapshot.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "domain": {"type": "string"},
+            },
+            "required": ["path"],
+        },
     },
 ]
 
 TIER2_TOOLS_SCHEMA = [
     {
         "name": "run_design_task",
-        "description": "Give the built-in agent a whole design job in plain English (e.g. 'add a power LED with a 1k series resistor'). The agent plans, executes, verifies, and repairs on its own. Requires an Anthropic API key on the server.",
+        "description": "Give the iterative LLM agent a whole design job in plain English (e.g. 'add a power LED with a 1k series resistor'). It can inspect, act, verify, recover, and pause for approval.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -155,18 +170,14 @@ def _ipc_socket_present(socket_path: Optional[str] = None) -> bool:
 class MCPSession:
     """Backend handles, open documents, and tool routing for the server."""
 
-    def __init__(self, mode: str = "sexpr", socket_path: Optional[str] = None):
-        """Create a session with an explicitly selected backend policy.
-
-        ``sexpr`` is file-only, ``ipc`` is live-only, and ``ipc-fallback``
-        explicitly opts in to S-expression failover.  ``auto`` selects live
-        IPC when its socket exists, but never silently changes an IPC failure
-        into a file-backend operation.
-        """
-        if mode not in {"sexpr", "ipc", "ipc-fallback", "auto"}:
-            raise ValueError(
-                "mode must be one of: sexpr, ipc, ipc-fallback, auto"
-            )
+    def __init__(
+        self,
+        mode: str = "sexpr",
+        socket_path: Optional[str] = None,
+        provider: Optional[LLMProvider] = None,
+    ):
+        """mode: 'sexpr' (files only), 'ipc' (live lanes with file fallback),
+        'auto' (live lanes when KiCad's socket exists, else files only)."""
         self.mode = mode
         self.socket_path = socket_path
         self.sch_path: Optional[str] = None
@@ -175,16 +186,13 @@ class MCPSession:
         # One shared file backend: holds open-document state for both
         # domains and serves as the fallback for both IPC lanes.
         self.file_backend = SexprBackend()
-        if mode in {"ipc", "ipc-fallback"} or (
-            mode == "auto" and _ipc_socket_present(socket_path)
-        ):
+        if mode == "ipc" or (mode == "auto" and _ipc_socket_present(socket_path)):
             self.live = True
-            fallback = self.file_backend if mode == "ipc-fallback" else None
             self.sch_backend: KiCadBackend = IPCBackend(
-                socket_path=socket_path, fallback=fallback
+                socket_path=socket_path, fallback=self.file_backend
             )
             self.pcb_backend: KiCadBackend = IPCPCBBackend(
-                socket_path=socket_path, fallback=fallback
+                socket_path=socket_path, fallback=self.file_backend
             )
         else:
             self.live = False
@@ -192,9 +200,126 @@ class MCPSession:
 
         self.sch_tools = ToolRegistry(self.sch_backend)
         self.pcb_tools = ToolRegistry(self.pcb_backend)
-        self.pending_approvals: Dict[str, PermissionRequest] = {}
-        self.session_id = str(uuid.uuid4())
-        self.session_status = SessionStatus.PENDING
+        self.llm_agent = None
+        self.llm_domain: Optional[str] = None
+        self.llm_provider = provider
+
+    def _new_llm_agent(self, backend: KiCadBackend):
+        from ..agent.agent import KiCadAgent
+        from ..providers.factory import configured_provider
+
+        provider = self.llm_provider
+        if provider is None:
+            provider = configured_provider()
+            if provider is None:
+                raise RuntimeError(
+                    "No LLM provider configured and ANTHROPIC_API_KEY is unset."
+                )
+        return KiCadAgent(backend=backend, provider=provider)
+
+    def _llm_backend(self, domain: str) -> KiCadBackend:
+        if domain == "schematic":
+            if not self.sch_path:
+                raise ValueError("No schematic open. Call open_schematic first.")
+            return self.sch_backend
+        if domain == "pcb":
+            if not self.pcb_path:
+                raise ValueError("No board open. Call open_pcb first.")
+            return self.pcb_backend
+        raise ValueError("Domain must be 'schematic' or 'pcb'.")
+
+    def start_llm_task(
+        self,
+        task: str,
+        domain: str = "schematic",
+        max_steps: int = 20,
+    ) -> Dict[str, Any]:
+        if not task.strip():
+            return {"status": "error", "code": "MISSING_ARGUMENT",
+                    "message": "start_llm_task requires a non-empty 'task'"}
+        domain = (domain or "schematic").lower()
+        try:
+            backend = self._llm_backend(domain)
+            self.llm_agent = self._new_llm_agent(backend)
+            self.llm_domain = domain
+            return self.llm_agent.run_llm(task, domain=domain, max_steps=max_steps)
+        except RuntimeError as exc:
+            return {"status": "error", "code": "NO_PROVIDER",
+                    "message": str(exc)}
+        except (ValueError, TypeError) as exc:
+            return {"status": "error", "code": "BAD_REQUEST", "message": str(exc)}
+        except Exception as exc:
+            return {"status": "error", "code": "AGENT_FAILED",
+                    "message": f"LLM task failed: {exc}"}
+
+    def llm_session_info(self) -> Dict[str, Any]:
+        if self.llm_agent is None:
+            return {"status": "error", "code": "NO_ACTIVE_LLM_SESSION",
+                    "message": "No iterative LLM task is active."}
+        session = self.llm_agent.state.session
+        return {
+            "status": "success",
+            "session_id": session.session_id,
+            "domain": session.domain,
+            "session_status": session.status,
+            "message_count": len(session.messages),
+            "metadata": session.metadata,
+        }
+
+    def resolve_llm_approval(self, approved: bool) -> Dict[str, Any]:
+        if self.llm_agent is None:
+            return {"status": "error", "code": "NO_ACTIVE_LLM_SESSION",
+                    "message": "No iterative LLM task is active."}
+        try:
+            return self.llm_agent.resolve_llm_approval(approved)
+        except ValueError as exc:
+            return {"status": "error", "code": "BAD_SESSION_STATE",
+                    "message": str(exc)}
+
+    def cancel_llm_task(self) -> Dict[str, Any]:
+        if self.llm_agent is None:
+            return {"status": "error", "code": "NO_ACTIVE_LLM_SESSION",
+                    "message": "No iterative LLM task is active."}
+        try:
+            return self.llm_agent.cancel_llm()
+        except ValueError as exc:
+            return {"status": "error", "code": "BAD_SESSION_STATE",
+                    "message": str(exc)}
+
+    def save_llm_session(self, path: str) -> Dict[str, Any]:
+        if self.llm_agent is None:
+            return {"status": "error", "code": "NO_ACTIVE_LLM_SESSION",
+                    "message": "No iterative LLM task is active."}
+        if not path:
+            return {"status": "error", "code": "MISSING_ARGUMENT",
+                    "message": "save_llm_session requires 'path'"}
+        try:
+            saved = self.llm_agent.save_llm_session(path)
+            return {"status": "success", "path": saved,
+                    "session_id": self.llm_agent.state.session.session_id}
+        except Exception as exc:
+            return {"status": "error", "code": "SESSION_SAVE_FAILED",
+                    "message": str(exc)}
+
+    def load_llm_session(self, path: str, domain: str = "schematic") -> Dict[str, Any]:
+        if not path:
+            return {"status": "error", "code": "MISSING_ARGUMENT",
+                    "message": "load_llm_session requires 'path'"}
+        domain = (domain or "schematic").lower()
+        try:
+            backend = self._llm_backend(domain)
+            self.llm_agent = self._new_llm_agent(backend)
+            self.llm_domain = domain
+            session = self.llm_agent.load_llm_session(path)
+            return {"status": "success", "session": session.to_dict()}
+        except RuntimeError as exc:
+            return {"status": "error", "code": "NO_PROVIDER",
+                    "message": str(exc)}
+        except (ValueError, TypeError) as exc:
+            return {"status": "error", "code": "BAD_REQUEST", "message": str(exc)}
+        except Exception as exc:
+            return {"status": "error", "code": "SESSION_LOAD_FAILED",
+                    "message": str(exc)}
 
     # -- documents ------------------------------------------------------
 
@@ -207,7 +332,6 @@ class MCPSession:
             return {"status": "error", "code": "WRONG_FILE_TYPE",
                     "message": f"Not a .kicad_sch file: {path}"}
         self.sch_path = resolved
-        self.session_status = SessionStatus.RUNNING
         self.file_backend.load_schematic(resolved)
         if self.sch_backend is not self.file_backend:
             try:
@@ -231,7 +355,6 @@ class MCPSession:
             return {"status": "error", "code": "WRONG_FILE_TYPE",
                     "message": f"Not a .kicad_pcb file: {path}"}
         self.pcb_path = resolved
-        self.session_status = SessionStatus.RUNNING
         self.file_backend.load_board(resolved)
         if self.pcb_backend is not self.file_backend:
             try:
@@ -251,20 +374,9 @@ class MCPSession:
             return {"status": "error", "code": "NO_ACTIVE_DOCUMENT",
                     "message": "No schematic open. Call open_schematic first."}
         if not self.live:
-            action = Action(action_type=ActionType.SAVE_DOCUMENT, domain=ActionDomain.SCHEMATIC)
-            permission = self.sch_tools.permission_policy.check(action)
-            if permission.request:
-                self.pending_approvals[permission.request.request_id] = permission.request
-                return {"status": "approval_required", "code": "APPROVAL_REQUIRED",
-                        "approval_request": permission.request.to_dict()}
             return {"status": "success", "file": self.sch_path,
                     "message": "File backend writes in place; nothing left to save."}
         act = Action(action_type=ActionType.SAVE_DOCUMENT, domain=ActionDomain.SCHEMATIC)
-        permission = self.sch_tools.permission_policy.check(act)
-        if permission.request:
-            self.pending_approvals[permission.request.request_id] = permission.request
-            return {"status": "approval_required", "code": "APPROVAL_REQUIRED",
-                    "approval_request": permission.request.to_dict()}
         res = self.sch_backend.execute(act)
         return {"status": "success" if res.success else "error",
                 "file": self.sch_path, "data": res.data,
@@ -275,121 +387,22 @@ class MCPSession:
             return {"status": "error", "code": "NO_ACTIVE_DOCUMENT",
                     "message": "No board open. Call open_pcb first."}
         if not self.live:
-            action = Action(action_type=ActionType.SAVE_DOCUMENT, domain=ActionDomain.PCB)
-            permission = self.pcb_tools.permission_policy.check(action)
-            if permission.request:
-                self.pending_approvals[permission.request.request_id] = permission.request
-                return {"status": "approval_required", "code": "APPROVAL_REQUIRED",
-                        "approval_request": permission.request.to_dict()}
             return {"status": "success", "file": self.pcb_path,
                     "message": "File backend writes in place; nothing left to save."}
         act = Action(action_type=ActionType.SAVE_DOCUMENT, domain=ActionDomain.PCB)
-        permission = self.pcb_tools.permission_policy.check(act)
-        if permission.request:
-            self.pending_approvals[permission.request.request_id] = permission.request
-            return {"status": "approval_required", "code": "APPROVAL_REQUIRED",
-                    "approval_request": permission.request.to_dict()}
         res = self.pcb_backend.execute(act)
         return {"status": "success" if res.success else "error",
                 "file": self.pcb_path, "data": res.data,
                 "error": str(res.error) if res.error else None}
 
     def session_info(self) -> Dict[str, Any]:
-        ipc_status = None
-        if self.live:
-            ipc_status = {
-                "schematic": self.sch_backend.connection_status(),
-                "pcb": self.pcb_backend.connection_status(),
-            }
         return {
             "status": "success",
             "mode": self.mode,
             "live": self.live,
             "ipc_socket_present": _ipc_socket_present(self.socket_path),
-            "ipc": ipc_status,
             "schematic": self.sch_path,
             "pcb": self.pcb_path,
-            "pending_approvals": len(self.pending_approvals),
-            "session_id": self.session_id,
-            "session_status": self.session_status.value,
-        }
-
-    def save_session(self, path: str) -> Dict[str, Any]:
-        if not path:
-            return {"status": "error", "code": "MISSING_ARGUMENT",
-                    "message": "save_session requires 'path'"}
-        snapshot = SessionSnapshot(
-            session_id=self.session_id,
-            status=self.session_status.value,
-            mode=self.mode,
-            backend=self.mode,
-            schematic=self.sch_path,
-            pcb=self.pcb_path,
-            pending_approvals={
-                request_id: request.to_dict()
-                for request_id, request in self.pending_approvals.items()
-            },
-        )
-        try:
-            saved = SessionSnapshotStore.save(path, snapshot)
-        except (OSError, ValueError) as exc:
-            return {"status": "error", "code": "SNAPSHOT_WRITE_FAILED",
-                    "message": str(exc)}
-        return {"status": "success", "snapshot_version": 1, **saved}
-
-    def resume_session(self, path: str) -> Dict[str, Any]:
-        if not path:
-            return {"status": "error", "code": "MISSING_ARGUMENT",
-                    "message": "resume_session requires 'path'"}
-        try:
-            snapshot = SessionSnapshotStore.load(path)
-        except SnapshotError as exc:
-            return {"status": "error", "code": exc.code, "message": exc.message}
-        if snapshot.status not in RESUMABLE_STATUSES:
-            return {
-                "status": "error",
-                "code": "SESSION_NOT_RESUMABLE",
-                "message": f"Session status '{snapshot.status}' is terminal.",
-            }
-        if snapshot.schematic and not os.path.exists(snapshot.schematic):
-            return {"status": "error", "code": "DOCUMENT_NOT_FOUND",
-                    "message": f"Schematic file not found: {snapshot.schematic}"}
-        if snapshot.pcb and not os.path.exists(snapshot.pcb):
-            return {"status": "error", "code": "DOCUMENT_NOT_FOUND",
-                    "message": f"Board file not found: {snapshot.pcb}"}
-        # Validate and decode all approval records before changing this session.
-        try:
-            approvals = {
-                request_id: PermissionRequest.from_dict(payload)
-                for request_id, payload in snapshot.pending_approvals.items()
-            }
-        except (KeyError, TypeError, ValueError) as exc:
-            return {"status": "error", "code": "SNAPSHOT_CORRUPT",
-                    "message": f"Invalid approval record: {exc}"}
-        try:
-            if snapshot.schematic:
-                opened = self.open_schematic(snapshot.schematic)
-                if opened.get("status") != "success":
-                    return {"status": "error", "code": "RESUME_FAILED",
-                            "message": opened.get("message", "Could not open schematic.")}
-            if snapshot.pcb:
-                opened = self.open_pcb(snapshot.pcb)
-                if opened.get("status") != "success":
-                    return {"status": "error", "code": "RESUME_FAILED",
-                            "message": opened.get("message", "Could not open board.")}
-        except Exception as exc:
-            return {"status": "error", "code": "RESUME_FAILED", "message": str(exc)}
-        self.session_id = snapshot.session_id
-        self.session_status = SessionStatus(snapshot.status)
-        self.pending_approvals = approvals
-        return {
-            "status": "success",
-            "snapshot_version": 1,
-            "session_id": self.session_id,
-            "session_status": self.session_status.value,
-            "schematic": self.sch_path,
-            "pcb": self.pcb_path,
-            "pending_approvals": len(self.pending_approvals),
         }
 
     # -- dispatch -------------------------------------------------------
@@ -413,27 +426,28 @@ class MCPSession:
             return self.save_pcb()
         if tool_name == "session_info":
             return self.session_info()
-        if tool_name == "save_session":
-            return self.save_session(str(args.get("path", "") or ""))
-        if tool_name == "resume_session":
-            return self.resume_session(str(args.get("path", "") or ""))
-        if tool_name == "approve_action":
-            request_id = str(args.get("request_id", "") or "")
-            if not request_id or request_id not in self.pending_approvals:
-                return {"status": "error", "code": "UNKNOWN_APPROVAL",
-                        "message": "No pending approval matches request_id."}
-            try:
-                decision = PermissionDecision(str(args.get("decision", "")).lower())
-            except ValueError:
-                return {"status": "error", "code": "BAD_DECISION",
-                        "message": "decision must be 'allow' or 'deny'."}
-            request = self.pending_approvals.pop(request_id)
-            registry = self.sch_tools if request.action.domain is ActionDomain.SCHEMATIC else self.pcb_tools
-            tool_name_for_action = request.action.action_type.value
-            result = registry.execute_action(request.action, approval=decision)
-            if result.get("status") == "approval_required":
-                self.pending_approvals[request_id] = request
-            return result
+        if tool_name == "start_llm_task":
+            return self.start_llm_task(
+                str(args.get("task", "") or ""),
+                str(args.get("domain", "schematic") or "schematic"),
+                int(args.get("max_steps", 20) or 20),
+            )
+        if tool_name == "llm_session_info":
+            return self.llm_session_info()
+        if tool_name == "resolve_llm_approval":
+            if "approved" not in args:
+                return {"status": "error", "code": "MISSING_ARGUMENT",
+                        "message": "resolve_llm_approval requires 'approved'"}
+            return self.resolve_llm_approval(bool(args["approved"]))
+        if tool_name == "cancel_llm_task":
+            return self.cancel_llm_task()
+        if tool_name == "save_llm_session":
+            return self.save_llm_session(str(args.get("path", "") or ""))
+        if tool_name == "load_llm_session":
+            return self.load_llm_session(
+                str(args.get("path", "") or ""),
+                str(args.get("domain", "schematic") or "schematic"),
+            )
         if tool_name == "run_design_task":
             from .tier2 import run_design_task
 
@@ -441,41 +455,13 @@ class MCPSession:
                 self, str(args.get("task", "") or ""),
                 str(args.get("domain", "schematic") or "schematic"),
             )
-        if tool_name == "verify_schematic_connectivity":
-            if not self.sch_path:
-                return {"status": "error", "code": "NO_ACTIVE_DOCUMENT",
-                        "message": "No schematic open. Call open_schematic first."}
-            from ..schematic.pin_geometry import endpoint_report
-            with open(self.sch_path, "r", encoding="utf-8", errors="ignore") as f:
-                report = endpoint_report(f.read())
-            return {
-                "status": "success",
-                "connected": not report["errors"],
-                "errors": report["errors"],
-                "warnings": [w["message"] for w in report["warnings"]],
-            }
         try:
             if tool_name in SCHEMATIC_TOOL_NAMES:
                 if tool_name not in ("search_symbols",) and not self.sch_path:
                     return {"status": "error", "code": "NO_ACTIVE_DOCUMENT",
                             "message": "No schematic open. Call open_schematic first."}
-                result = self.sch_tools.execute_tool(tool_name, args)
-                if result.get("status") == "approval_required":
-                    request = PermissionRequest.from_dict(result["approval_request"])
-                    self.pending_approvals[request.request_id] = request
-                if tool_name == "get_schematic_state" and result.get("status") == "success":
-                    result["schematic"] = result.pop("data", {})
-                return result
-            if tool_name not in {
-                t["name"] for t in self.pcb_tools.get_available_tools("pcb")
-            }:
-                return {"status": "error", "code": "UNKNOWN_TOOL",
-                        "message": f"Unknown tool: {tool_name}"}
-            result = self.pcb_tools.execute_tool(tool_name, args)
-            if result.get("status") == "approval_required":
-                request = PermissionRequest.from_dict(result["approval_request"])
-                self.pending_approvals[request.request_id] = request
-            return result
+                return self.sch_tools.execute_tool(tool_name, args)
+            return self.pcb_tools.execute_tool(tool_name, args)
         except Exception as e:  # never leak a traceback over the wire
             return {"status": "error", "code": "TOOL_FAILED",
                     "message": f"{tool_name} failed: {e}"}

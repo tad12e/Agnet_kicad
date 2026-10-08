@@ -13,7 +13,7 @@ from ..core.actions import Action, ActionDomain, ActionType
 from ..core.results import ActionResult
 from ..core.validator import ActionValidator
 from ..core.contracts import PermissionDecision
-from ..core.permissions import PermissionPolicy
+from ..core.permissions import PermissionPolicy, TOOL_RISKS, ToolRisk
 
 
 # ===========================================================================
@@ -513,19 +513,19 @@ class ToolRegistry:
                 "code": "ACTION_VALIDATION_FAILED",
                 "diagnostics": [error.to_dict() for error in diagnostics],
             }
-        permission = self.permission_policy.decide(act, approval)
-        if permission.decision is PermissionDecision.ASK:
+        risk = TOOL_RISKS.get(tool_name, ToolRisk.LOW)
+        decision = self.permission_policy.decide(risk)
+        if decision is PermissionDecision.ASK and approval is not PermissionDecision.ALLOW:
             return {
                 "status": "approval_required",
                 "code": "APPROVAL_REQUIRED",
-                "approval_request": permission.request.to_dict(),
+                "tool": tool_name,
             }
-        if permission.decision is PermissionDecision.DENY:
+        if decision is PermissionDecision.DENY and approval is not PermissionDecision.ALLOW:
             return {
                 "status": "error",
                 "code": "PERMISSION_DENIED",
                 "message": "Action was denied by the permission policy.",
-                "approval_request": permission.request.to_dict() if permission.request else None,
             }
         res = self.backend.execute(act)
         if not res.success:
