@@ -74,3 +74,20 @@ class KiCadBackend(abc.ABC):
             passed=True,
             message="Backend default verification passed",
         )
+
+    def create_checkpoint(self, domain: str = "pcb") -> Dict[str, Any]:
+        """Create rollback data when a backend supports durable checkpoints."""
+        return {
+            "domain": domain,
+            "rollback_supported": False,
+            "reason": f"Backend '{self.name}' does not support checkpoints.",
+        }
+
+    def restore_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        """Restore a checkpoint or explicitly reject unsupported rollback."""
+        raise NotImplementedError(
+            f"Backend '{self.name}' does not support checkpoint restoration."
+        )
+
+    def discard_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        """Release checkpoint resources after a successful commit."""
