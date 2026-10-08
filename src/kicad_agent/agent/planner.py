@@ -8,14 +8,14 @@ from typing import Any, Dict, List, Optional
 from ..core.actions import Action, ActionDomain, ActionType
 from ..core.goals import Goal, GoalType
 from ..core.plans import Plan
-from ..providers.llm import AnthropicProvider, LLMProvider
+from ..providers.llm import LLMProvider
 
 
 class Planner:
     """Translates user requests into domain-neutral structured plans with dependency graphs."""
 
     def __init__(self, provider: Optional[LLMProvider] = None):
-        self.provider = provider or AnthropicProvider()
+        self.provider = provider
 
     def plan_request(self, user_request: str, domain: str = "pcb", current_state: Optional[Dict[str, Any]] = None) -> Plan:
         """Parse natural language request into structured goals and actions."""
