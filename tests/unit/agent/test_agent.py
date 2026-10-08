@@ -1,14 +1,18 @@
 """Unit tests for agent lifecycle: observe, plan, execute, verify, repair, tools, and validation."""
 
+import pytest
+
 from tests import mock_pcbnew
 from kicad_agent.agent.agent import KiCadAgent
 from kicad_agent.agent.error_analyzer import ErrorAnalyzer
 from kicad_agent.agent.planner import Planner
 from kicad_agent.agent.repair import RepairEngine
 from kicad_agent.agent.tools import ToolRegistry, ALL_TOOLS_SCHEMA
+from kicad_agent.providers.llm import LLMProvider
 from kicad_agent.backends.pcbnew import PcbnewBackend
 from kicad_agent.core.actions import Action, ActionType
 from kicad_agent.core.errors import AgentError, ErrorCategory
+from kicad_agent.core.goals import Goal, GoalType
 from kicad_agent.core.results import ActionResult
 from kicad_agent.core.validator import ActionValidator
 
@@ -93,6 +97,40 @@ def test_tool_registry():
     assert res_add["status"] == "success"
 
 
+def test_tool_registry_guards_llm_mutations_with_action_validation():
+    mock_pcbnew.ResetBoard()
+    backend = PcbnewBackend()
+    backend._pcbnew = mock_pcbnew
+    backend._board = mock_pcbnew.GetBoard()
+    registry = ToolRegistry(backend=backend)
+
+    result = registry.execute_guarded_tool(
+        "move_footprint",
+        {"reference": "U99", "x": 30.0, "y": 20.0},
+    )
+
+    assert result["status"] == "error"
+    assert result["code"] == "ACTION_VALIDATION_FAILED"
+    assert result["errors"][0]["category"] == "MISSING_OBJECT"
+
+
+def test_tool_registry_requires_approval_for_high_risk_llm_mutations():
+    mock_pcbnew.ResetBoard()
+    backend = PcbnewBackend()
+    backend._pcbnew = mock_pcbnew
+    backend._board = mock_pcbnew.GetBoard()
+    registry = ToolRegistry(backend=backend)
+
+    result = registry.execute_guarded_tool(
+        "remove_footprint",
+        {"reference": "R1"},
+    )
+
+    assert result["status"] == "approval_required"
+    assert result["code"] == "APPROVAL_REQUIRED"
+    assert result["risk"] == "high"
+
+
 def test_agent_orchestrator_run():
     mock_pcbnew.ResetBoard()
     backend = PcbnewBackend()
@@ -105,3 +143,151 @@ def test_agent_orchestrator_run():
     assert len(result["results"]) > 0
     assert "trace" in result
     assert len(result["trace"]["events"]) > 0
+
+
+def test_agent_llm_entry_point_uses_backend_tool_registry():
+    class ScriptedProvider(LLMProvider):
+        def __init__(self):
+            self.calls = 0
+
+        def generate_response(self, messages, tools=None, system_prompt="", model=None):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "content": "Inspecting the board.",
+                    "tool_calls": [{
+                        "id": "board-call",
+                        "function": {
+                            "name": "get_board_info",
+                            "arguments": {},
+                        },
+                    }],
+                }
+            return {"content": "The board was inspected."}
+
+    mock_pcbnew.ResetBoard()
+    backend = PcbnewBackend()
+    backend._pcbnew = mock_pcbnew
+    backend._board = mock_pcbnew.GetBoard()
+    provider = ScriptedProvider()
+
+    agent = KiCadAgent(backend=backend, provider=provider)
+    result = agent.run_llm("Inspect the board")
+
+    assert result["status"] == "completed"
+    assert result["steps"] == 2
+    assert provider.calls == 2
+    assert agent.state.session.messages[-2].message_type.value == "tool_result"
+    assert agent.state.session.messages[-1].message_type.value == "assistant"
+    event_types = [event["event_type"] for event in result["trace"]["events"]]
+    assert "LLM_PROVIDER_CALL" in event_types
+    assert "LLM_TOOL_CALL" in event_types
+    assert "LLM_TOOL_RESULT" in event_types
+    assert result["trace"]["metrics"]["success"] is True
+
+
+def test_agent_can_resolve_llm_approval():
+    class ApprovalProvider(LLMProvider):
+        def __init__(self):
+            self.calls = 0
+
+        def generate_response(self, messages, tools=None, system_prompt="", model=None):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "tool_calls": [{
+                        "id": "remove-call",
+                        "function": {
+                            "name": "remove_footprint",
+                            "arguments": {"reference": "R1"},
+                        },
+                    }],
+                }
+            return {"content": "Approved action completed."}
+
+    mock_pcbnew.ResetBoard()
+    backend = PcbnewBackend()
+    backend._pcbnew = mock_pcbnew
+    backend._board = mock_pcbnew.GetBoard()
+    agent = KiCadAgent(backend=backend, provider=ApprovalProvider())
+
+    paused = agent.run_llm("Remove R1")
+    resumed = agent.resolve_llm_approval(True)
+
+    assert paused["status"] == "waiting_approval"
+    assert resumed["status"] == "completed"
+
+
+def test_agent_llm_tool_result_includes_independent_verification():
+    class MutationProvider(LLMProvider):
+        def __init__(self):
+            self.calls = 0
+
+        def generate_response(self, messages, tools=None, system_prompt="", model=None):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "tool_calls": [{
+                        "id": "add-call",
+                        "function": {
+                            "name": "add_footprint",
+                            "arguments": {
+                                "reference": "R1",
+                                "x": 50.0,
+                                "y": 50.0,
+                            },
+                        },
+                    }],
+                }
+            return {"content": "Placement verified."}
+
+    mock_pcbnew.ResetBoard()
+    backend = PcbnewBackend()
+    backend._pcbnew = mock_pcbnew
+    backend._board = mock_pcbnew.GetBoard()
+    agent = KiCadAgent(backend=backend, provider=MutationProvider())
+
+    result = agent.run_llm("Place R1 at 50,50")
+
+    assert result["status"] == "completed"
+    tool_result = result["session"]["messages"][2]["result"]
+    assert tool_result["status"] == "success"
+    assert tool_result["verification"]["passed"] is True
+
+
+def test_agent_can_cancel_llm_loop():
+    class Provider(LLMProvider):
+        def generate_response(self, messages, tools=None, system_prompt="", model=None):
+            return {"content": "done"}
+
+    mock_pcbnew.ResetBoard()
+    backend = PcbnewBackend()
+    backend._pcbnew = mock_pcbnew
+    backend._board = mock_pcbnew.GetBoard()
+    agent = KiCadAgent(backend=backend, provider=Provider())
+    agent.run_llm("Inspect the board")
+
+    with pytest.raises(ValueError, match="not active"):
+        agent.cancel_llm()
+
+
+def test_agent_llm_can_use_native_goal_verification():
+    class Provider(LLMProvider):
+        def generate_response(self, messages, tools=None, system_prompt="", model=None):
+            return {"content": "Inspection complete."}
+
+    mock_pcbnew.ResetBoard()
+    backend = PcbnewBackend()
+    backend._pcbnew = mock_pcbnew
+    backend._board = mock_pcbnew.GetBoard()
+    agent = KiCadAgent(backend=backend, provider=Provider())
+    goal = Goal(
+        goal_type=GoalType.INSPECTION,
+        description="Inspect the current PCB",
+    )
+
+    result = agent.run_llm("Inspect the board", goal=goal)
+
+    assert result["status"] == "completed"
+    assert result["session"]["metadata"]["final_verification"]["passed"] is True
+    assert result["session"]["metadata"]["final_verification"]["verifier_name"] == "intent"

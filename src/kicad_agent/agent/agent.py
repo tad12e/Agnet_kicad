@@ -15,18 +15,26 @@ from ..backends.pcbnew import PcbnewBackend
 from ..backends.sexpr import SexprBackend
 from ..core.actions import Action, ActionType
 from ..core.errors import AgentError, ErrorCategory
+from ..core.goals import Goal
 from ..core.plans import Plan
 from ..core.results import ActionResult, VerificationResult
+from ..core.session import AgentSession, SessionMessage
+from ..core.session_store import SessionStore
+from ..core.permissions import PermissionPolicy
 from ..core.transactions import Transaction
 from ..core.validator import ActionValidator
 from .context import AgentContext
 from .error_analyzer import ErrorAnalyzer
 from .executor import Executor
+from .loop import AgentLoop
 from .observability import AgentTrace
 from .planner import Planner
 from .repair import RepairEngine
 from .state import AgentState
+from .tools import ToolRegistry
 from .verifier import AgentVerifier
+from ..providers.factory import configured_provider
+from ..providers.llm import LLMProvider
 
 
 class KiCadAgent:
@@ -41,6 +49,8 @@ class KiCadAgent:
         repair_engine: Optional[RepairEngine] = None,
         max_retries: int = 3,
         fallback: Optional[KiCadBackend] = None,
+        provider: Optional[LLMProvider] = None,
+        session_store: Optional[SessionStore] = None,
     ):
         # Default to PcbnewBackend if available, else SexprBackend fallback
         if backend is None:
@@ -57,14 +67,18 @@ class KiCadAgent:
                 and self.backend.fallback is None):
             self.backend.fallback = fallback
 
-        self.planner = planner or Planner()
+        self.provider = configured_provider(provider)
+        self.planner = planner or Planner(provider=self.provider)
         self.executor = executor or Executor(self.backend)
         self.verifier = verifier or AgentVerifier()
         self.repair_engine = repair_engine or RepairEngine(max_retries=max_retries)
         self.max_retries = max_retries
+        self.session_store = session_store or SessionStore()
+        self.tool_registry = ToolRegistry(self.backend)
 
         self.state = AgentState()
         self.context = AgentContext()
+        self.context.session = self.state.session
 
     def run(
         self,
@@ -75,6 +89,10 @@ class KiCadAgent:
     ) -> Dict[str, Any]:
         """Execute a natural language user request through the agent lifecycle."""
         trace = AgentTrace(user_request=user_request)
+        self.state.session.user_request = user_request
+        self.state.session.domain = domain
+        self.state.session.status = "running"
+        self.context.append_message(SessionMessage.user(user_request, domain=domain))
         self.state.active_domain = domain
         self.state.iteration_count = 0
 
@@ -92,6 +110,16 @@ class KiCadAgent:
         executed_results = []
         all_passed = True
         transaction = Transaction()
+        checkpoint = self.backend.create_checkpoint(domain)
+        transaction.set_checkpoint(
+            checkpoint,
+            (
+                lambda: self.backend.restore_checkpoint(checkpoint)
+                if checkpoint.get("rollback_supported")
+                else None
+            ),
+            lambda: self.backend.discard_checkpoint(checkpoint),
+        )
 
         for action in plan.actions:
             self.state.iteration_count += 1
@@ -200,10 +228,18 @@ class KiCadAgent:
                 except Exception as e:
                     trace.record("BOARD_SAVE_FAILED", f"Auto-save failed: {e}")
         else:
-            transaction.rollback()
-            trace.record("TRANSACTION_ROLLED_BACK", "Transaction rolled back due to verification failure")
+            rollback_succeeded = transaction.rollback()
+            trace.record(
+                "TRANSACTION_ROLLED_BACK",
+                (
+                    "Transaction checkpoint restored."
+                    if rollback_succeeded and checkpoint.get("rollback_supported")
+                    else "Rollback is unsupported for this backend."
+                ),
+            )
 
         final_state = self.backend.get_state(domain)
+        self.state.session.status = "completed" if all_passed else "failed"
         trace.finish(success=all_passed, final_state=final_state)
 
         return {
@@ -213,4 +249,233 @@ class KiCadAgent:
             "transaction_state": transaction.state.value,
             "final_state": final_state,
             "trace": trace.to_dict(),
+        }
+
+    def run_llm(
+        self,
+        user_request: str,
+        domain: str = "pcb",
+        provider: Optional[LLMProvider] = None,
+        max_steps: int = 20,
+        system_prompt: str = "",
+        session: Optional[AgentSession] = None,
+        permission_policy: Optional[PermissionPolicy] = None,
+        final_verifier: Optional[Callable[[AgentSession], Dict[str, Any]]] = None,
+        goal: Optional[Goal] = None,
+    ) -> Dict[str, Any]:
+        """Run the opt-in iterative LLM/tool loop against this backend.
+
+        The existing :meth:`run` method remains the deterministic planner
+        path. This method is the migration seam for callers that want
+        provider-driven tool selection and replanning.
+        """
+        active_provider = provider or self.provider
+        if active_provider is None:
+            raise ValueError(
+                "An LLM provider is required for run_llm(); "
+                "pass provider= or configure KiCadAgent(provider=...)."
+            )
+
+        active_session = session
+        if active_session is None or (
+            active_session.user_request
+            and active_session.user_request != user_request
+        ):
+            active_session = AgentSession(
+                user_request=user_request,
+                domain=domain,
+            )
+
+        trace = AgentTrace(user_request=user_request)
+        loop = self._create_llm_loop(
+            active_provider,
+            permission_policy=permission_policy,
+            max_steps=max_steps,
+            system_prompt=system_prompt,
+            trace=trace,
+            final_verifier=final_verifier,
+            goal=goal,
+            domain=domain,
+        )
+        result = loop.run(
+            user_request=user_request,
+            domain=domain,
+            session=active_session,
+        )
+        self.state.session = active_session
+        self.context.session = active_session
+        self.context.conversation_history = [
+            message.to_dict() for message in active_session.messages
+        ]
+        self.state.active_domain = domain
+        self.state.iteration_count = result["steps"]
+        self._llm_loop = loop
+        trace.finish(
+            success=result["status"] == "completed",
+            final_state=self.backend.get_state(domain),
+        )
+        result["trace"] = trace.to_dict()
+        return result
+
+    def _create_llm_loop(
+        self,
+        provider: LLMProvider,
+        permission_policy: Optional[PermissionPolicy],
+        max_steps: int,
+        system_prompt: str,
+        trace: AgentTrace,
+        final_verifier: Optional[Callable[[AgentSession], Dict[str, Any]]],
+        goal: Optional[Goal],
+        domain: str,
+    ) -> AgentLoop:
+        """Build a loop for both new and restored sessions."""
+        execute_tool = lambda name, arguments: self._execute_llm_tool(
+            name,
+            arguments,
+            permission_policy=permission_policy,
+        )
+        approved_tool = lambda name, arguments: self._execute_llm_tool(
+            name,
+            arguments,
+            permission_policy=permission_policy,
+            approved=True,
+        )
+        native_final_verifier = final_verifier
+        if native_final_verifier is None and goal is not None:
+            native_final_verifier = lambda active_session: (
+                self._verify_llm_goal(goal, domain)
+            )
+
+        return AgentLoop(
+            provider=provider,
+            tool_executor=execute_tool,
+            approval_executor=approved_tool,
+            tool_schemas=self.tool_registry.get_available_tools(),
+            max_steps=max_steps,
+            system_prompt=system_prompt,
+            trace=trace,
+            final_verifier=native_final_verifier,
+        )
+
+    def _verify_llm_goal(self, goal: Goal, domain: str) -> Dict[str, Any]:
+        """Evaluate a native goal against freshly observed backend state."""
+        verification = self.verifier.verify_goal(
+            goal,
+            self.backend.get_state(domain),
+        )
+        return {
+            "passed": verification.passed,
+            "verifier_name": verification.verifier_name,
+            "message": verification.message,
+            "details": verification.details,
+            "violations": verification.violations,
+        }
+
+    def _execute_llm_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        permission_policy: Optional[PermissionPolicy] = None,
+        approved: bool = False,
+    ) -> Dict[str, Any]:
+        """Execute one model tool and independently verify mutations."""
+        result = self.tool_registry.execute_guarded_tool(
+            tool_name,
+            arguments,
+            permission_policy=permission_policy,
+            approved=approved,
+        )
+        if result.get("status") != "success":
+            return result
+
+        action = self.tool_registry._action_for_tool(tool_name, arguments)
+        if action is None:
+            return result
+
+        verification = self.verifier.verify_action(
+            action,
+            ActionResult(
+                action_id=action.action_id,
+                success=True,
+                data=result.get("data", {}),
+            ),
+            expected={"state": self.backend.get_state(action.domain.value)},
+        )
+        result["verification"] = verification.to_dict()
+        if not verification.passed:
+            return {
+                **result,
+                "status": "error",
+                "code": "TOOL_VERIFICATION_FAILED",
+                "message": verification.message,
+            }
+        return result
+
+    def resolve_llm_approval(
+        self,
+        approved: bool,
+        session: Optional[AgentSession] = None,
+    ) -> Dict[str, Any]:
+        """Approve or deny the pending LLM tool call and resume the session."""
+        loop = getattr(self, "_llm_loop", None)
+        active_session = session or self.state.session
+        if loop is None:
+            raise ValueError("No active LLM loop is available.")
+        result = loop.resume_approval(active_session, approved)
+        self.state.session = active_session
+        self.context.session = active_session
+        self.context.conversation_history = [
+            message.to_dict() for message in active_session.messages
+        ]
+        self.state.iteration_count = result["steps"]
+        if isinstance(result, dict) and hasattr(loop, "trace") and loop.trace is not None:
+            loop.trace.finish(
+                success=result["status"] == "completed",
+                final_state=self.backend.get_state(active_session.domain),
+            )
+            result["trace"] = loop.trace.to_dict()
+        return result
+
+    def save_llm_session(self, path: str) -> str:
+        """Persist the active LLM conversation for later continuation."""
+        return self.session_store.save(self.state.session, path)
+
+    def load_llm_session(self, path: str) -> AgentSession:
+        """Restore a saved LLM conversation into this agent instance."""
+        session = self.session_store.load(path)
+        self.state.session = session
+        self.context.session = session
+        self.context.conversation_history = [
+            message.to_dict() for message in session.messages
+        ]
+        self.state.active_domain = session.domain
+        self.state.iteration_count = int(session.metadata.get("steps", 0))
+        if self.provider is not None:
+            self._llm_loop = self._create_llm_loop(
+                self.provider,
+                permission_policy=None,
+                max_steps=int(session.metadata.get("max_steps", 20)),
+                system_prompt="",
+                trace=AgentTrace(user_request=session.user_request),
+                final_verifier=None,
+                goal=None,
+                domain=session.domain,
+            )
+        return session
+
+    def cancel_llm(self) -> Dict[str, Any]:
+        """Request cancellation of the active LLM loop."""
+        loop = getattr(self, "_llm_loop", None)
+        if loop is None:
+            raise ValueError("No active LLM loop is available.")
+        if self.state.session.status not in {"running", "waiting_approval"}:
+            raise ValueError(
+                f"LLM session is not active: {self.state.session.status}"
+            )
+        loop.cancel()
+        self.state.session.status = "cancelled"
+        return {
+            "status": "cancelled",
+            "session_id": self.state.session.session_id,
+            "steps": int(self.state.session.metadata.get("steps", 0)),
         }

@@ -11,6 +11,13 @@ from typing import Any, Callable, Dict, List, Optional
 from ..backends.base import KiCadBackend
 from ..core.actions import Action, ActionDomain, ActionType
 from ..core.results import ActionResult
+from ..core.permissions import (
+    PermissionDecision,
+    PermissionPolicy,
+    TOOL_RISKS,
+    ToolRisk,
+)
+from ..core.validator import ActionValidator
 
 
 # ===========================================================================
@@ -392,6 +399,102 @@ class ToolRegistry:
     def get_available_tools(self) -> List[Dict[str, Any]]:
         """Return all JSON tool schemas for LLM registration."""
         return ALL_TOOLS_SCHEMA
+
+    def execute_guarded_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        permission_policy: Optional[PermissionPolicy] = None,
+        approved: bool = False,
+    ) -> Dict[str, Any]:
+        """Validate mutation tool calls before dispatching them.
+
+        Read-only tools retain their existing behavior. Mutation calls are
+        converted to the shared Action IR and checked against the latest
+        backend state before the legacy dispatcher executes them.
+        """
+        policy = permission_policy or PermissionPolicy()
+        risk = TOOL_RISKS.get(tool_name, ToolRisk.LOW)
+        decision = policy.decide(risk)
+        if decision is PermissionDecision.DENY and not approved:
+            return {
+                "status": "error",
+                "code": "PERMISSION_DENIED",
+                "message": f"Tool '{tool_name}' is not permitted.",
+                "tool": tool_name,
+                "risk": risk.value,
+                "decision": decision.value,
+            }
+        if decision is PermissionDecision.ASK and not approved:
+            return {
+                "status": "approval_required",
+                "code": "APPROVAL_REQUIRED",
+                "message": f"Approval required before running '{tool_name}'.",
+                "tool": tool_name,
+                "arguments": dict(arguments),
+                "risk": risk.value,
+                "decision": decision.value,
+            }
+
+        action = self._action_for_tool(tool_name, arguments)
+        if action is not None:
+            errors = ActionValidator.validate_action(
+                action,
+                current_state=self.backend.get_state(
+                    action.domain.value
+                ),
+            )
+            if errors:
+                return {
+                    "status": "error",
+                    "code": "ACTION_VALIDATION_FAILED",
+                    "message": "Tool call failed action validation.",
+                    "errors": [error.to_dict() for error in errors],
+                }
+        return self.execute_tool(tool_name, arguments)
+
+    @staticmethod
+    def _action_for_tool(
+        tool_name: str,
+        arguments: Dict[str, Any],
+    ) -> Optional[Action]:
+        """Build the Action IR for tools that mutate or validate state."""
+        pcb_actions = {
+            "create_board": ActionType.CREATE_BOARD,
+            "load_board": ActionType.LOAD_BOARD,
+            "save_board": ActionType.SAVE_BOARD,
+            "add_footprint": ActionType.ADD_FOOTPRINT,
+            "move_footprint": ActionType.MOVE_FOOTPRINT,
+            "rotate_footprint": ActionType.ROTATE_FOOTPRINT,
+            "remove_footprint": ActionType.REMOVE_FOOTPRINT,
+            "add_track": ActionType.ADD_TRACK,
+            "add_via": ActionType.ADD_VIA,
+            "create_zone": ActionType.CREATE_ZONE,
+            "create_board_outline": ActionType.CREATE_BOARD_OUTLINE,
+        }
+        schematic_actions = {
+            "add_symbol": ActionType.ADD_SYMBOL,
+            "add_wire": ActionType.ADD_WIRE,
+            "add_junction": ActionType.ADD_JUNCTION,
+            "add_label": ActionType.ADD_LABEL,
+            "add_bus": ActionType.ADD_BUS,
+            "move_symbol": ActionType.MOVE_SYMBOL,
+            "rotate_symbol": ActionType.ROTATE_SYMBOL,
+            "delete_symbol": ActionType.DELETE_SYMBOL,
+        }
+        if tool_name in pcb_actions:
+            return Action(
+                action_type=pcb_actions[tool_name],
+                domain=ActionDomain.PCB,
+                parameters=dict(arguments),
+            )
+        if tool_name in schematic_actions:
+            return Action(
+                action_type=schematic_actions[tool_name],
+                domain=ActionDomain.SCHEMATIC,
+                parameters=dict(arguments),
+            )
+        return None
 
     def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a named tool with arguments against the KiCad backend."""

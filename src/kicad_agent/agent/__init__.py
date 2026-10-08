@@ -5,6 +5,7 @@ from .context import AgentContext
 from .error_analyzer import ErrorAnalyzer
 from .executor import Executor
 from .observability import AgentTrace, TraceEvent
+from .loop import AgentLoop, NormalizedResponse, NormalizedToolCall
 from .planner import Planner
 from .repair import RepairEngine
 from .state import AgentState
@@ -14,6 +15,7 @@ from .verifier import AgentVerifier
 __all__ = [
     "ALL_TOOLS_SCHEMA",
     "AgentContext",
+    "AgentLoop",
     "AgentError",
     "AgentState",
     "AgentTrace",
@@ -21,6 +23,8 @@ __all__ = [
     "ErrorAnalyzer",
     "Executor",
     "KiCadAgent",
+    "NormalizedResponse",
+    "NormalizedToolCall",
     "Planner",
     "READ_TOOLS_SCHEMA",
     "RepairEngine",
