@@ -8,7 +8,7 @@ Usage:
     python -m kicad_agent.mcp.server [--backend sexpr|ipc|auto]
                                      [--sch FILE] [--pcb FILE]
 
-Tools: 5 session tools (open/save/info), 18 PCB primitives, 12
+Tools: 8 session tools (open/save/info/snapshot/resume/approval), 18 PCB primitives, 12
 schematic primitives, and run_design_task (Tier 2 whole-job agent).
 """
 
@@ -31,7 +31,19 @@ SERVER_NAME = "kicad-agent"
 
 def all_tool_definitions() -> List[Dict[str, Any]]:
     """Every tool the server exposes, in listing order."""
-    return SERVER_TOOLS_SCHEMA + ALL_TOOLS_SCHEMA
+    from ..agent.tools import (
+        PCB_READ_TOOLS_SCHEMA,
+        PCB_WRITE_TOOLS_SCHEMA,
+        SCHEMATIC_READ_SCHEMA,
+        SCHEMATIC_WRITE_SCHEMA,
+    )
+    return (
+        SERVER_TOOLS_SCHEMA
+        + SCHEMATIC_READ_SCHEMA
+        + SCHEMATIC_WRITE_SCHEMA
+        + PCB_READ_TOOLS_SCHEMA
+        + PCB_WRITE_TOOLS_SCHEMA
+    )
 
 
 def build_server(session: MCPSession) -> Server:
@@ -85,8 +97,10 @@ def create_session(
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="KiCad AI agent MCP server (stdio).")
     parser.add_argument(
-        "--backend", default="sexpr", choices=("sexpr", "ipc", "auto"),
-        help="sexpr: files only; ipc: live KiCad lanes with file fallback; "
+        "--backend", default="sexpr",
+        choices=("sexpr", "ipc", "ipc-fallback", "auto"),
+        help="sexpr: files only; ipc: live only; "
+             "ipc-fallback: explicitly enable S-expression failover; "
              "auto: live when KiCad's socket exists, else files only.",
     )
     parser.add_argument("--sch", default=None, help="Pre-open a .kicad_sch file.")

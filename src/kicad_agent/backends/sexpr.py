@@ -800,6 +800,30 @@ class SexprBackend(KiCadBackend):
         p = action.parameters
 
         try:
+            # These branches used to return optimistic acknowledgements even
+            # though they did not modify or verify the file.  A file backend
+            # must report unsupported operations as failures, not simulate
+            # live-editor behavior.
+            unsupported = {
+                ActionType.MOVE_FOOTPRINT,
+                ActionType.ROTATE_FOOTPRINT,
+                ActionType.REMOVE_FOOTPRINT,
+                ActionType.DELETE_FOOTPRINT,
+                ActionType.CREATE_BOARD_OUTLINE,
+                ActionType.MODIFY_BOARD_OUTLINE,
+                ActionType.RUN_DRC,
+                ActionType.CREATE_BOARD,
+            }
+            if action.action_type in unsupported:
+                raise AgentError(
+                    category=ErrorCategory.INVALID_ACTION,
+                    message=(
+                        f"SexprBackend does not support action "
+                        f"{action.action_type.value}; no file change was made."
+                    ),
+                    operation=action.action_type.value,
+                )
+
             if action.action_type == ActionType.ADD_FOOTPRINT:
                 if not self.pcb_filepath:
                     raise AgentError(category=ErrorCategory.FILE_ERROR, message="No PCB file set for S-expr execution")

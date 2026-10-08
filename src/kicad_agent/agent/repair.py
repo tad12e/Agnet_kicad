@@ -11,11 +11,26 @@ Implements the 5-tiered error recovery strategy:
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ..core.actions import Action, ActionDomain, ActionType
 from ..core.errors import AgentError, ErrorCategory, ErrorSeverity
 from ..core.results import ActionResult, VerificationResult
+
+
+@dataclass
+class RepairOutcome:
+    """Explicit bounded-repair result used by the controller and adapters."""
+
+    status: str
+    attempt: int
+    action: Optional[Action] = None
+    reason: str = ""
+
+    @property
+    def repaired(self) -> bool:
+        return self.status == "repaired" and self.action is not None
 
 
 class RepairEngine:
@@ -32,6 +47,8 @@ class RepairEngine:
         attempt: int = 1,
     ) -> Optional[Action]:
         """Attempt to construct a corrected replacement action for a failed step (Levels 1 & 2)."""
+        if attempt < 1 or attempt > self.max_retries:
+            return None
         err_msg = ""
         category = ErrorCategory.UNKNOWN_ERROR
 
@@ -130,6 +147,32 @@ class RepairEngine:
             )
 
         return None
+
+    def repair(
+        self,
+        failed_action: Action,
+        result: Optional[ActionResult] = None,
+        verification: Optional[VerificationResult] = None,
+        attempt: int = 1,
+    ) -> RepairOutcome:
+        """Return an explicit, bounded outcome without changing the legacy API."""
+        if attempt > self.max_retries:
+            return RepairOutcome("exhausted", attempt, reason="Maximum repair attempts reached.")
+        replacement = self.attempt_repair(
+            failed_action, result=result, verification=verification, attempt=attempt
+        )
+        if replacement is None:
+            return RepairOutcome(
+                "not_repairable",
+                attempt,
+                reason="No deterministic repair rule matched the failure.",
+            )
+        return RepairOutcome(
+            "repaired",
+            attempt,
+            action=replacement,
+            reason=replacement.description,
+        )
 
     def synthesize_error_diagnostic(
         self,

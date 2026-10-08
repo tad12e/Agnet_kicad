@@ -9,6 +9,7 @@ import os
 import shutil
 
 from kicad_agent.agent.tools import ALL_TOOLS_SCHEMA
+from kicad_agent.agent.runtime import AgentRuntime
 from kicad_agent.mcp.server import all_tool_definitions
 from kicad_agent.mcp.session import MCPSession
 
@@ -19,12 +20,12 @@ def _fresh_session():
 
 def test_mcp_tool_schemas_complete():
     tools = all_tool_definitions()
-    assert len(tools) == 38  # 5 session + 1 tier2 + 19 pcb + 13 schematic
+    assert len(tools) == 41  # 8 session + 1 tier2 + 19 pcb + 13 schematic
     assert len(ALL_TOOLS_SCHEMA) == 32
     names = [t["name"] for t in tools]
     for expected in (
         "open_schematic", "open_pcb", "save_schematic", "save_pcb",
-        "session_info", "run_design_task",
+        "session_info", "save_session", "resume_session", "approve_action", "run_design_task",
         "get_schematic_state", "get_symbol_pins", "search_symbols",
         "verify_schematic_connectivity",
         "add_symbol", "add_wire", "add_junction", "add_label",
@@ -46,12 +47,45 @@ def test_mcp_tool_schemas_complete():
 
 
 def test_mcp_session_info():
-    out = _fresh_session().dispatch("session_info", {})
+    session = _fresh_session()
+    out = session.dispatch("session_info", {})
     assert out["status"] == "success"
     assert out["mode"] == "sexpr"
     assert out["live"] is False
     assert out["schematic"] is None
     assert out["pcb"] is None
+    assert out["session_status"] == "pending"
+
+
+def test_mcp_session_snapshot_and_resume(sample_sch_file, tmp_path):
+    session = _fresh_session()
+    opened = session.dispatch("open_schematic", {"path": str(sample_sch_file)})
+    assert opened["status"] == "success"
+    session_id = session.session_id
+    snapshot = tmp_path / "session.json"
+    saved = session.dispatch("save_session", {"path": str(snapshot)})
+    assert saved["status"] == "success"
+    assert saved["snapshot_version"] == 1
+
+    resumed = _fresh_session().dispatch("resume_session", {"path": str(snapshot)})
+    assert resumed["status"] == "success"
+    assert resumed["session_id"] == session_id
+    assert resumed["schematic"] == os.path.abspath(str(sample_sch_file))
+
+
+def test_mcp_resume_rejects_terminal_snapshot(sample_sch_file, tmp_path):
+    session = _fresh_session()
+    session.dispatch("open_schematic", {"path": str(sample_sch_file)})
+    snapshot = tmp_path / "session.json"
+    session.dispatch("save_session", {"path": str(snapshot)})
+    from kicad_agent.core.session_snapshot import SessionSnapshot, SessionSnapshotStore
+    terminal = SessionSnapshot(
+        session_id="terminal", status="completed", mode="build", backend="sexpr"
+    )
+    SessionSnapshotStore.save(str(snapshot), terminal)
+    result = session.dispatch("resume_session", {"path": str(snapshot)})
+    assert result["status"] == "error"
+    assert result["code"] == "SESSION_NOT_RESUMABLE"
 
 
 def test_mcp_no_document_errors():
@@ -97,7 +131,12 @@ def test_mcp_open_and_label_roundtrip(sample_sch_file, tmp_path):
     assert isinstance(check["warnings"], list)
 
     saved = session.dispatch("save_schematic", {})
-    assert saved["status"] == "success"
+    assert saved["status"] == "approval_required"
+    approved = session.dispatch("approve_action", {
+        "request_id": saved["approval_request"]["request_id"],
+        "decision": "allow",
+    })
+    assert approved["status"] == "success"
 
     with open(scratch, "r", encoding="utf-8", errors="ignore") as f:
         assert "NET1" in f.read()
@@ -128,3 +167,26 @@ def test_mcp_unknown_tool():
     out = _fresh_session().dispatch("frobnicate", {})
     assert out["status"] == "error"
     assert "frobnicate" in out["message"]
+
+
+def test_agent_runtime_keeps_orchestrator_result_and_backend_boundary():
+    calls = {}
+
+    class FakeAgent:
+        def __init__(self, backend):
+            calls["backend"] = backend
+
+        def run(self, task, domain):
+            calls["request"] = (task, domain)
+            return {"success": True, "steps": 2}
+
+    backend = object()
+    result = AgentRuntime(agent_factory=FakeAgent).run(
+        backend=backend, task="add an LED", domain="schematic"
+    )
+
+    assert result == {"success": True, "steps": 2}
+    assert calls == {
+        "backend": backend,
+        "request": ("add an LED", "schematic"),
+    }

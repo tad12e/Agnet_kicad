@@ -8,13 +8,17 @@ the server for the agent's planner.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
+from ..agent.runtime import AgentRuntime
 
-def run_design_task(session: Any, task: str, domain: str = "schematic") -> Dict[str, Any]:
-    """Plan, execute, verify, and repair one design job via KiCadAgent."""
-    from ..agent.agent import KiCadAgent
-
+def run_design_task(
+    session: Any,
+    task: str,
+    domain: str = "schematic",
+    runtime: Optional[AgentRuntime] = None,
+) -> Dict[str, Any]:
+    """Adapt an MCP whole-job request to the agent runtime."""
     if not task.strip():
         return {"status": "error", "code": "MISSING_ARGUMENT",
                 "message": "run_design_task requires a non-empty 'task'"}
@@ -35,8 +39,9 @@ def run_design_task(session: Any, task: str, domain: str = "schematic") -> Dict[
                 "message": "No board open. Call open_pcb first."}
     backend = session.sch_backend if domain == "schematic" else session.pcb_backend
     try:
-        agent = KiCadAgent(backend=backend)
-        result = agent.run(task, domain=domain)
+        result = (runtime or AgentRuntime()).run(
+            backend=backend, task=task, domain=domain
+        )
     except Exception as e:
         return {"status": "error", "code": "AGENT_FAILED",
                 "message": f"Design task failed: {e}"}

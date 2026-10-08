@@ -55,6 +55,25 @@ class SchematicConnectivityVerifier(BaseVerifier):
 
         text = self._load_text(expected)
         if text is None:
+            # Some legacy schematic-capable adapters cannot expose document
+            # text, but do return a normalized wire snapshot.  Validate that
+            # snapshot rather than treating execution success as proof.
+            snapshot = expected.get("action_result", {}) if expected else {}
+            start = action.parameters.get("start")
+            end = action.parameters.get("end")
+            if (
+                action.action_type.value in {"add_wire", "add_bus"}
+                and isinstance(snapshot, dict)
+                and snapshot.get("start") == start
+                and snapshot.get("end") == end
+            ):
+                return VerificationResult(
+                    verifier_name=self.name,
+                    passed=True,
+                    message="Wire endpoints verified from backend post-action snapshot.",
+                    details={"evidence_source": "backend_post_action_snapshot"},
+                    outcome="passed",
+                )
             return VerificationResult(
                 verifier_name=self.name,
                 passed=False,

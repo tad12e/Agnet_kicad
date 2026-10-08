@@ -7,6 +7,7 @@ over NNG (Nanomsg Next Gen) sockets using Protocol Buffers.
 from __future__ import annotations
 
 import os
+import socket
 import time
 from typing import Optional, Type, TypeVar
 
@@ -100,6 +101,27 @@ class KiCadIPCClient:
     @property
     def is_connected(self) -> bool:
         return self._connected
+
+    def connection_status(self) -> dict:
+        """Return transport state without opening a connection.
+
+        Status inspection is deliberately side-effect free.  In particular,
+        callers such as MCP ``session_info`` must not create an NNG socket or
+        block while KiCad is unavailable.
+        """
+        socket_path = self.socket_path
+        filesystem_path = (
+            socket_path[6:] if socket_path.startswith("ipc://") else socket_path
+        )
+        socket_present = bool(filesystem_path and os.path.exists(filesystem_path))
+        return {
+            "connected": bool(self._connected),
+            "socket_path": socket_path,
+            "socket_present": socket_present,
+            "endpoint_available": bool(self._connected or socket_present),
+            "transport_available": pynng is not None,
+            "timeout_ms": self.timeout_ms,
+        }
 
     def send(self, command: Message, response_type: Type[R]) -> R:
         """Serialize a protobuf command, send to KiCad, and return typed response."""

@@ -12,6 +12,36 @@ from .goals import Goal
 
 
 @dataclass
+class PlanStage:
+    """A named, ordered stage in a multi-step execution plan."""
+
+    name: str
+    description: str = ""
+    order: int = 0
+    action_ids: List[str] = field(default_factory=list)
+    completed: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "order": self.order,
+            "action_ids": self.action_ids,
+            "completed": self.completed,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PlanStage":
+        return cls(
+            name=data["name"],
+            description=data.get("description", ""),
+            order=int(data.get("order", 0)),
+            action_ids=list(data.get("action_ids", [])),
+            completed=bool(data.get("completed", False)),
+        )
+
+
+@dataclass
 class Plan:
     """Structured plan composed of goals and ordered actions.
     
@@ -26,6 +56,7 @@ class Plan:
     plan_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     goals: List[Goal] = field(default_factory=list)
     actions: List[Action] = field(default_factory=list)
+    stages: List[PlanStage] = field(default_factory=list)
     dependencies: Dict[str, List[str]] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
@@ -43,7 +74,23 @@ class Plan:
             "plan_id": self.plan_id,
             "goals": [g.to_dict() for g in self.goals],
             "actions": [a.to_dict() for a in self.actions],
+            "stages": [s.to_dict() for s in self.stages],
             "dependencies": self.dependencies,
             "metadata": self.metadata,
             "created_at": self.created_at,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Plan":
+        return cls(
+            plan_id=data.get("plan_id", str(uuid.uuid4())),
+            goals=[Goal.from_dict(item) for item in data.get("goals", [])],
+            actions=[Action.from_dict(item) for item in data.get("actions", [])],
+            stages=[PlanStage.from_dict(item) for item in data.get("stages", [])],
+            dependencies={
+                str(key): list(value)
+                for key, value in data.get("dependencies", {}).items()
+            },
+            metadata=dict(data.get("metadata", {})),
+            created_at=float(data.get("created_at", time.time())),
+        )

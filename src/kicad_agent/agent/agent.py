@@ -13,6 +13,8 @@ from ..backends.ipc import IPCBackend
 from ..backends.pcbnew import PcbnewBackend
 from ..backends.sexpr import SexprBackend
 from ..core.actions import Action, ActionType
+from ..core.contracts import AgentMode, PermissionDecision, PermissionRequest
+from ..core.permissions import PermissionPolicy
 from ..core.errors import AgentError, ErrorCategory
 from ..core.plans import Plan
 from ..core.results import ActionResult, VerificationResult
@@ -46,6 +48,8 @@ class KiCadAgent:
         max_iterations: int = 20,
         max_retries: int = 3,
         fallback: Optional[KiCadBackend] = None,
+        permission_policy: Optional[PermissionPolicy] = None,
+        approval_resolver: Optional[Callable[[PermissionRequest], PermissionDecision]] = None,
     ):
         if backend is None:
             pcb_be = PcbnewBackend()
@@ -77,6 +81,8 @@ class KiCadAgent:
             repair_engine=self.repair_engine,
             max_iterations=self.max_iterations,
             max_retries=self.max_retries,
+            permission_policy=permission_policy,
+            approval_resolver=approval_resolver,
         )
 
         self.state = AgentState()
@@ -92,6 +98,7 @@ class KiCadAgent:
         domain: str = "pcb",
         on_step: Optional[Callable[[str, Any], None]] = None,
         auto_save: bool = False,
+        mode: AgentMode | str = AgentMode.BUILD,
     ) -> Dict[str, Any]:
         """Execute a natural language user request through the iterative agent loop."""
         res = self.controller.run(
@@ -99,6 +106,7 @@ class KiCadAgent:
             domain=domain,
             on_step=on_step,
             auto_save=auto_save,
+            mode=mode,
         )
         self.state = self.controller.backend.get_state(domain)  # type: ignore[assignment]
         return res

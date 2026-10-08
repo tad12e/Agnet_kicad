@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from .errors import AgentError
+from .errors import AgentError, ErrorCategory, ErrorSeverity
 
 
 @dataclass
@@ -39,6 +39,34 @@ class ActionResult:
             "backend_used": self.backend_used,
         }
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ActionResult":
+        error_data = data.get("error")
+        error = None
+        if error_data:
+            error = AgentError(
+                error_id=error_data.get("error_id", ""),
+                category=ErrorCategory(
+                    error_data.get("category", ErrorCategory.UNKNOWN_ERROR.value)
+                ),
+                severity=ErrorSeverity(
+                    error_data.get("severity", ErrorSeverity.ERROR.value)
+                ),
+                message=error_data.get("message", ""),
+                operation=error_data.get("operation"),
+                target_object=error_data.get("target_object"),
+                context=dict(error_data.get("context", {})),
+                recoverable=bool(error_data.get("recoverable", True)),
+            )
+        return cls(
+            action_id=data["action_id"],
+            success=bool(data.get("success", False)),
+            data=dict(data.get("data", {})),
+            error=error,
+            execution_time_ms=float(data.get("execution_time_ms", 0.0)),
+            backend_used=data.get("backend_used", ""),
+        )
+
 
 @dataclass
 class VerificationResult:
@@ -58,6 +86,28 @@ class VerificationResult:
     details: Dict[str, Any] = field(default_factory=dict)
     violations: List[Dict[str, Any]] = field(default_factory=list)
     timestamp: float = field(default_factory=time.time)
+    # ``not_verifiable`` is deliberately distinct from a passed check.  A
+    # backend acknowledgement alone is not proof that the document changed.
+    outcome: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.outcome:
+            self.outcome = "passed" if self.passed else "failed"
+
+    @classmethod
+    def not_verifiable(
+        cls,
+        verifier_name: str,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> "VerificationResult":
+        return cls(
+            verifier_name=verifier_name,
+            passed=False,
+            message=message,
+            details=details or {},
+            outcome="not_verifiable",
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize verification result to dictionary."""
@@ -68,4 +118,17 @@ class VerificationResult:
             "details": self.details,
             "violations": self.violations,
             "timestamp": self.timestamp,
+            "outcome": self.outcome,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "VerificationResult":
+        return cls(
+            verifier_name=data["verifier_name"],
+            passed=bool(data.get("passed", False)),
+            message=data.get("message", ""),
+            details=dict(data.get("details", {})),
+            violations=list(data.get("violations", [])),
+            timestamp=float(data.get("timestamp", time.time())),
+            outcome=data.get("outcome", ""),
+        )

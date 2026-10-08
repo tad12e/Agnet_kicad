@@ -11,6 +11,9 @@ from typing import Any, Callable, Dict, List, Optional
 from ..backends.base import KiCadBackend
 from ..core.actions import Action, ActionDomain, ActionType
 from ..core.results import ActionResult
+from ..core.validator import ActionValidator
+from ..core.contracts import PermissionDecision
+from ..core.permissions import PermissionPolicy
 
 
 # ===========================================================================
@@ -467,8 +470,10 @@ def tool_call_to_action(tool_name: str, arguments: Dict[str, Any], domain: str =
     elif tool_name == "save_board":
         return Action(action_type=ActionType.SAVE_BOARD, domain=ActionDomain.PCB, parameters=args, description="Save PCB file")
 
-    # Fallback
-    return Action(action_type=ActionType.GET_STATE, domain=d, parameters=args, description=f"Execute {tool_name}")
+    # Keep the return type stable for callers, but mark unknown tools so the
+    # runtime validator emits a diagnostic instead of executing GET_STATE.
+    args["_unknown_tool"] = tool_name
+    return Action(action_type=ActionType.GET_STATE, domain=d, parameters=args, description=f"Unknown tool {tool_name}")
 
 
 # ===========================================================================
@@ -478,8 +483,9 @@ def tool_call_to_action(tool_name: str, arguments: Dict[str, Any], domain: str =
 class ToolRegistry:
     """Dispatches tool calls directly to KiCad backend and returns structured outputs."""
 
-    def __init__(self, backend: KiCadBackend):
+    def __init__(self, backend: KiCadBackend, permission_policy: Optional[PermissionPolicy] = None):
         self.backend = backend
+        self.permission_policy = permission_policy or PermissionPolicy()
 
     def get_available_tools(self, domain: Optional[str] = None) -> List[Dict[str, Any]]:
         """Return all JSON tool schemas for LLM registration."""
@@ -489,45 +495,85 @@ class ToolRegistry:
             return PCB_READ_TOOLS_SCHEMA + PCB_WRITE_TOOLS_SCHEMA
         return ALL_TOOLS_SCHEMA
 
-    def execute_tool(self, tool_name: str, arguments: Dict[str, Any], domain: str = "pcb") -> Dict[str, Any]:
-        """Execute a named tool with arguments against the KiCad backend and produce rich observations."""
+    def execute_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        domain: str = "pcb",
+        approval: Optional[PermissionDecision] = None,
+    ) -> Dict[str, Any]:
+        """Execute a named tool against the backend with policy enforcement."""
         act = tool_call_to_action(tool_name, arguments, domain=domain)
+        diagnostics = ActionValidator.validate_action(
+            act, current_state=self.backend.get_state(act.domain.value)
+        )
+        if diagnostics:
+            return {
+                "status": "error",
+                "code": "ACTION_VALIDATION_FAILED",
+                "diagnostics": [error.to_dict() for error in diagnostics],
+            }
+        permission = self.permission_policy.decide(act, approval)
+        if permission.decision is PermissionDecision.ASK:
+            return {
+                "status": "approval_required",
+                "code": "APPROVAL_REQUIRED",
+                "approval_request": permission.request.to_dict(),
+            }
+        if permission.decision is PermissionDecision.DENY:
+            return {
+                "status": "error",
+                "code": "PERMISSION_DENIED",
+                "message": "Action was denied by the permission policy.",
+                "approval_request": permission.request.to_dict() if permission.request else None,
+            }
         res = self.backend.execute(act)
-
         if not res.success:
             return {
                 "status": "error",
                 "error": str(res.error) if res.error else "Execution failed",
                 "observation": f"Tool '{tool_name}' failed: {res.error}",
             }
-
-        # Formulate rich descriptive observation for the LLM
         obs = f"Successfully executed '{tool_name}'"
         if tool_name == "add_symbol":
-            ref = arguments.get("reference", "")
-            val = arguments.get("value", "")
-            x = arguments.get("x")
-            y = arguments.get("y")
+            ref, val = arguments.get("reference", ""), arguments.get("value", "")
+            x, y = arguments.get("x"), arguments.get("y")
             obs = f"Symbol {ref} ({val}) added at ({x}, {y}). Pins: 1 at ({x-2.54}, {y}), 2 at ({x+2.54}, {y})"
         elif tool_name == "add_wire":
-            start = arguments.get("start")
-            end = arguments.get("end")
-            obs = f"Wire routed from {start} to {end}."
+            obs = f"Wire routed from {arguments.get('start')} to {arguments.get('end')}."
         elif tool_name == "get_symbol_pins":
-            ref = arguments.get("reference", "")
-            obs = f"Symbol {ref} pins: Pin 1 at (100.0, 80.0), Pin 2 at (100.0, 100.0)"
+            obs = f"Symbol {arguments.get('reference', '')} pins: Pin 1 at (100.0, 80.0), Pin 2 at (100.0, 100.0)"
         elif tool_name == "add_footprint":
-            ref = arguments.get("reference", "")
-            x = arguments.get("x")
-            y = arguments.get("y")
-            obs = f"Footprint {ref} placed at ({x}, {y}) mm."
+            obs = f"Footprint {arguments.get('reference', '')} placed at ({arguments.get('x')}, {arguments.get('y')}) mm."
         elif tool_name == "run_drc":
             obs = "DRC check passed: 0 errors, 0 unrouted nets."
         elif tool_name == "run_erc":
             obs = "ERC check passed: 0 warnings, 0 errors."
+        return {"status": "success", "data": res.data, "observation": obs}
 
-        return {
-            "status": "success",
-            "data": res.data,
-            "observation": obs,
-        }
+    def execute_action(
+        self,
+        action: Action,
+        approval: Optional[PermissionDecision] = None,
+    ) -> Dict[str, Any]:
+        """Execute a previously approved action without re-translating it."""
+        diagnostics = ActionValidator.validate_action(
+            action, current_state=self.backend.get_state(action.domain.value)
+        )
+        if diagnostics:
+            return {
+                "status": "error",
+                "code": "ACTION_VALIDATION_FAILED",
+                "diagnostics": [error.to_dict() for error in diagnostics],
+            }
+        permission = self.permission_policy.decide(action, approval)
+        if permission.decision is not PermissionDecision.ALLOW:
+            return {
+                "status": "error" if permission.decision is PermissionDecision.DENY else "approval_required",
+                "code": "PERMISSION_DENIED" if permission.decision is PermissionDecision.DENY else "APPROVAL_REQUIRED",
+                "approval_request": permission.request.to_dict() if permission.request else None,
+            }
+        result = self.backend.execute(action)
+        if not result.success:
+            return {"status": "error", "error": str(result.error) if result.error else "Execution failed"}
+        return {"status": "success", "data": result.data, "action_id": action.action_id}

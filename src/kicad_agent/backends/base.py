@@ -27,6 +27,14 @@ class KiCadBackend(abc.ABC):
         """Check if this backend is usable in the current environment."""
         pass
 
+    def connection_status(self) -> Dict[str, Any]:
+        """Return a JSON-safe connection/availability snapshot.
+
+        Backends predating live status reporting remain compatible through
+        this conservative default.
+        """
+        return {"backend": self.name, "available": self.is_available()}
+
     @abc.abstractmethod
     def connect(self) -> None:
         """Establish connection or initialize resources."""

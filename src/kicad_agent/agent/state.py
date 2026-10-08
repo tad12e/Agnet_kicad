@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from ..core.contracts import PermissionRequest
 
 from ..core.actions import Action
 from ..core.errors import AgentError
@@ -55,6 +56,7 @@ class AgentState:
     verification_history: List[VerificationResult] = field(default_factory=list)
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     errors: List[Dict[str, Any]] = field(default_factory=list)
+    pending_permission: Optional[PermissionRequest] = None
     repair_attempts: int = 0
     final_status: str = "pending"
     pcb_state: Optional[PCBState] = None

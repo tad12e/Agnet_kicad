@@ -76,6 +76,24 @@ def test_refused_live_action_fails_over(tmp_path):
     assert result.backend_used == "ipc->sexpr"
     assert "not ready" in result.data["ipc_error"]
     assert result.success is False
+    assert result.data["fallback_success"] is False
+    assert result.data["fallback_error"]["category"] == "INVALID_ACTION"
+
+
+def test_fallback_failure_preserves_ipc_and_fallback_diagnostics(tmp_path):
+    fallback, _ = _scratch_schematic(tmp_path)
+    backend = IPCBackend(client=_RefusingClient(), fallback=fallback)
+    result = backend.execute(
+        Action(
+            action_type=ActionType.ADD_JUNCTION,
+            domain=ActionDomain.SCHEMATIC,
+            parameters={"position": (10.0, 20.0)},
+        )
+    )
+    assert result.success is False
+    assert result.data["ipc_error"]
+    assert result.data["fallback_success"] is False
+    assert result.data["fallback_error"]["message"]
 
 
 def test_pcb_actions_never_fail_over(tmp_path):

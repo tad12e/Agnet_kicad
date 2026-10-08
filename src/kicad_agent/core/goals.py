@@ -49,3 +49,14 @@ class Goal:
             "criteria": self.criteria,
             "completed": self.completed,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Goal":
+        return cls(
+            goal_id=data.get("goal_id", str(uuid.uuid4())),
+            goal_type=GoalType(data.get("goal_type", GoalType.CUSTOM.value)),
+            description=data.get("description", ""),
+            targets=list(data.get("targets", [])),
+            criteria=dict(data.get("criteria", {})),
+            completed=bool(data.get("completed", False)),
+        )

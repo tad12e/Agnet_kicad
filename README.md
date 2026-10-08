@@ -218,6 +218,28 @@ print("Result:", result["success"])
 & "C:\Program Files\KiCad\10.0\bin\python.exe" scripts/diagnostic_ipc.py
 ```
 
+### Live external-LLM MCP demo
+
+The recommended demo keeps the reasoning model outside this repository. An
+external LLM connects to the stdio MCP server, proposes a plan, and calls only
+the published tools; the runtime validates, executes, observes, verifies, and
+repairs the design. Follow the complete walkthrough in
+[`docs/live-demo.md`](docs/live-demo.md).
+
+Start the server after opening the same schematic in KiCad:
+
+```powershell
+python -m kicad_agent.mcp.server --backend auto --sch C:\demo\led.kicad_sch
+```
+
+Configure the external LLM's MCP client to launch that command. A short demo
+then looks like: inspect with `get_schematic_state`, show the proposed plan to
+the operator, execute approved edits such as `add_symbol` and `add_wire`,
+verify with `verify_schematic_connectivity` and `run_erc`, repair or re-plan
+when verification fails, and save only after `approve_action` allows it.
+`session_info` and every action result identify whether live IPC or the
+S-expression fallback was used.
+
 ---
 
 ## 🔌 IPC Schematic Lane (live KiCad + automatic file fallback)

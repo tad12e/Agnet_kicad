@@ -10,9 +10,10 @@ from typing import Any, Dict, List, Optional
 
 from ..core.actions import Action, ActionDomain, ActionType
 from ..core.goals import Goal, GoalType
-from ..core.plans import Plan
+from ..core.plans import Plan, PlanStage
+from ..core.plan_validator import PlanValidator
 from ..providers.llm import AnthropicProvider, LLMProvider
-from ..tasks import Task, TaskType, TaskValidator
+from ..tasks import Task, TaskClassifier, TaskType, TaskValidator
 
 
 class Planner:
@@ -21,6 +22,12 @@ class Planner:
     def __init__(self, provider: Optional[LLMProvider] = None):
         self.provider = provider or AnthropicProvider()
         self.task_validator = TaskValidator()
+        self.task_classifier = TaskClassifier()
+        self.plan_validator = PlanValidator()
+
+    def classify_task(self, user_request: str, domain: str = "pcb") -> Task:
+        """Convert a user request into the shared structured task contract."""
+        return self.task_classifier.classify(user_request, domain=domain)
 
     def plan_stages(self, task: Task) -> List[str]:
         """Decompose a high-level engineering task into progressive verification stages."""
@@ -79,9 +86,10 @@ class Planner:
                 description="Task validation failed",
             )
             plan.add_action(action)
-            return plan
+            return self._finalize_plan(plan)
 
-        plan = Plan(metadata={"task": task.to_dict(), "domain": domain, "stages": self.plan_stages(task)})
+        plan = Plan(metadata={"task": task.to_dict(), "domain": domain})
+        self._attach_stages(plan, task)
         task_type = task.task_type
 
         if task_type == TaskType.BUILD_CIRCUIT:
@@ -123,7 +131,7 @@ class Planner:
                 )
                 plan.add_action(wire_action)
 
-            return plan
+            return self._finalize_plan(plan)
 
         return self.plan_request(task.description, domain=domain, current_state=current_state)
 
@@ -191,7 +199,7 @@ class Planner:
                 )
                 plan.add_action(act_conn)
 
-            return plan
+            return self._finalize_plan(plan)
 
         # 2. Move Footprint: "move R1 to (30, 20)" or "move R1 to 30,20"
         m_move = re.search(r"move\s+([a-zA-Z]+\d+)\s+(?:to\s+)?\(?([0-9.]+)[,\s]+([0-9.]+)\)?", req_lower)
@@ -216,7 +224,7 @@ class Planner:
                 description=f"Move footprint {ref} to ({x}, {y})",
             )
             plan.add_action(action)
-            return plan
+            return self._finalize_plan(plan)
 
         # 3. Rotate Footprint: "rotate R1 by 90 degrees" or "rotate R1 90"
         m_rotate = re.search(r"rotate\s+([a-zA-Z]+\d+)\s+(?:by\s+)?([0-9.]+)(?:\s*deg)?", req_lower)
@@ -239,7 +247,7 @@ class Planner:
                 description=f"Rotate footprint {ref} by {angle} deg",
             )
             plan.add_action(action)
-            return plan
+            return self._finalize_plan(plan)
 
         # 4. Remove / Delete Footprint: "remove R1" or "delete footprint R1"
         m_delete = re.search(r"(?:delete|remove)\s+(?:footprint\s+)?([a-zA-Z]+\d+)", req_lower)
@@ -253,7 +261,7 @@ class Planner:
                 description=f"Remove footprint {ref}",
             )
             plan.add_action(action)
-            return plan
+            return self._finalize_plan(plan)
 
         # 5. Place single component: "place resistor R1 (10k) at (100, 100)"
         m_place = re.search(r"place\s+(?:a\s+)?(\w+)?\s*([a-zA-Z]+\d+)(?:\s*\(([^)]+)\))?\s*(?:at\s*\(?([0-9.]+)[,\s]+([0-9.]+)\)?)?", req_lower)
@@ -287,7 +295,7 @@ class Planner:
                 description=f"Place {ref} at ({x}, {y})",
             )
             plan.add_action(action)
-            return plan
+            return self._finalize_plan(plan)
 
         # 6. Board Outline: "create board outline 80x50"
         m_outline = re.search(r"outline\s+([0-9.]+)\s*[xX*]\s*([0-9.]+)", req_lower)
@@ -301,7 +309,7 @@ class Planner:
                 description=f"Create board outline {w}x{h} mm",
             )
             plan.add_action(action)
-            return plan
+            return self._finalize_plan(plan)
 
         # 7. Check / DRC
         if "drc" in req_lower or "check" in req_lower:
@@ -309,9 +317,47 @@ class Planner:
             plan.goals.append(goal)
             action = Action(action_type=ActionType.RUN_DRC, description="Run DRC")
             plan.add_action(action)
-            return plan
+            return self._finalize_plan(plan)
 
         # Fallback inspection action
         action = Action(action_type=ActionType.GET_STATE, description="Inspect state")
         plan.add_action(action)
+        return self._finalize_plan(plan)
+
+    def validate_plan(self, plan: Plan) -> List[str]:
+        """Return structural diagnostics for a plan before execution."""
+        return self.plan_validator.validate(plan)
+
+    def _attach_stages(self, plan: Plan, task: Task) -> None:
+        """Attach ordered stage contracts while preserving legacy metadata."""
+        plan.stages = [
+            PlanStage(name=name, description=name, order=index)
+            for index, name in enumerate(self.plan_stages(task), start=1)
+        ]
+        plan.metadata["stages"] = [stage.to_dict() for stage in plan.stages]
+
+    def _finalize_plan(self, plan: Plan) -> Plan:
+        """Complete stage membership and dependency metadata for generated plans."""
+        if not plan.stages:
+            task_data = plan.metadata.get("task")
+            if isinstance(task_data, dict):
+                self._attach_stages(plan, Task.from_dict(task_data))
+            else:
+                plan.stages = [
+                    PlanStage(name="Execution", description="Execute planned actions", order=1)
+                ]
+
+        for stage in plan.stages:
+            stage.action_ids.clear()
+
+        if plan.actions:
+            stage_count = len(plan.stages)
+            for index, action in enumerate(plan.actions):
+                stage_index = min(index * stage_count // len(plan.actions), stage_count - 1)
+                plan.stages[stage_index].action_ids.append(action.action_id)
+                if index and action.action_id not in plan.dependencies:
+                    plan.dependencies[action.action_id] = [plan.actions[index - 1].action_id]
+
+        plan.metadata["stages"] = [stage.to_dict() for stage in plan.stages]
+        plan.metadata["validation_errors"] = self.validate_plan(plan)
         return plan

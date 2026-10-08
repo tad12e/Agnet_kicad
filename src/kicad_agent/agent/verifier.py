@@ -50,6 +50,30 @@ class AgentVerifier:
 
         from ..core.actions import ActionDomain
 
+        # Verification must use an observation made after execution.  Do not
+        # treat a successful backend return value as independent evidence.
+        read_only = {
+            ActionType.GET_STATE,
+            ActionType.GET_SCHEMATIC_STATE,
+            ActionType.GET_BOARD_STATE,
+            ActionType.GET_SYMBOL_PINS,
+            ActionType.GET_NETS,
+            ActionType.RUN_DRC,
+            ActionType.RUN_ERC,
+            ActionType.CHECK_CONNECTIVITY,
+            ActionType.VERIFY_CONNECTIVITY,
+            ActionType.CHECK_GEOMETRY,
+            ActionType.CHECK_PLACEMENT,
+            ActionType.VERIFY_PLACEMENT,
+        }
+        observed_state = expected.get("state") if expected else None
+        if action.action_type not in read_only and not isinstance(observed_state, dict):
+            return VerificationResult.not_verifiable(
+                "agent_verifier",
+                "Post-action state observation is required for independent verification.",
+                {"action_id": action.action_id, "evidence_source": "missing"},
+            )
+
         t = action.action_type
         if action.domain == ActionDomain.SCHEMATIC and t in (
             ActionType.ADD_WIRE, ActionType.ADD_BUS, ActionType.ADD_JUNCTION,

@@ -9,6 +9,39 @@ from ..tasks.task import Task
 
 
 @dataclass
+class ModelContext:
+    """Small provider-neutral snapshot for an external reasoning model.
+
+    The runtime keeps richer history in :class:`AgentContext`; this contract
+    deliberately contains only the information needed to choose the next
+    decision.  Lists are bounded so the representation remains useful for
+    smaller-context models.
+    """
+
+    task: Dict[str, Any] = field(default_factory=dict)
+    plan: Dict[str, Any] = field(default_factory=dict)
+    current_state: Dict[str, Any] = field(default_factory=dict)
+    available_tools: List[str] = field(default_factory=list)
+    errors: List[Dict[str, Any]] = field(default_factory=list)
+    observations: List[Any] = field(default_factory=list)
+    iteration: int = 0
+    max_iterations: int = 20
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return the stable JSON-compatible model context envelope."""
+        return {
+            "task": self.task,
+            "plan": self.plan,
+            "current_state": self.current_state,
+            "available_tools": self.available_tools,
+            "errors": self.errors,
+            "observations": self.observations,
+            "iteration": self.iteration,
+            "max_iterations": self.max_iterations,
+        }
+
+
+@dataclass
 class DesignConstraints:
     """Constraints applied to the current design session."""
     min_trace_width_mm: float = 0.2
@@ -46,8 +79,38 @@ class AgentContext:
     available_tools: List[str] = field(default_factory=list)
     stages: List[str] = field(default_factory=list)
     current_stage: str = ""
+    plan_summary: Dict[str, Any] = field(default_factory=dict)
     iteration_count: int = 0
     max_iterations: int = 20
+
+    def to_model_context(self, limit: int = 5) -> ModelContext:
+        """Build a bounded, provider-neutral context for model decision making."""
+        task = self.task.to_dict() if self.task else {"description": self.user_request}
+        stages = list(self.stages)
+        plan = dict(self.plan_summary)
+        plan.setdefault("stages", stages)
+        plan.setdefault("current_stage", self.current_stage or "Execution")
+
+        errors = [self.last_error] if self.last_error else []
+        observations: List[Any] = list(self.recent_observations[-limit:])
+        for action in self.recent_actions[-limit:]:
+            if action not in observations:
+                observations.append(action)
+
+        return ModelContext(
+            task=task,
+            plan=plan,
+            current_state=self.current_state_summary,
+            available_tools=list(self.available_tools),
+            errors=errors[-limit:],
+            observations=observations[-limit:],
+            iteration=self.iteration_count,
+            max_iterations=self.max_iterations,
+        )
+
+    def compact_for_llm(self, limit: int = 5) -> Dict[str, Any]:
+        """Return only the compact model-facing context representation."""
+        return self.to_model_context(limit=limit).to_dict()
 
     def format_for_llm(self) -> Dict[str, Any]:
         """Compile a concise, structured dictionary of essential context for the LLM."""
@@ -83,6 +146,7 @@ class AgentContext:
             "available_tools": self.available_tools,
             "stages": self.stages,
             "current_stage": self.current_stage,
+            "plan_summary": self.plan_summary,
             "iteration_count": self.iteration_count,
             "max_iterations": self.max_iterations,
         }

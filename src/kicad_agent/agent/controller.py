@@ -14,12 +14,15 @@ from ..backends.pcbnew import PcbnewBackend
 from ..backends.sexpr import SexprBackend
 from ..core.actions import Action, ActionDomain, ActionType
 from ..core.errors import AgentError, ErrorCategory
+from ..core.contracts import AgentMode, PermissionDecision, PermissionRequest
+from ..core.permissions import PermissionPolicy
 from ..core.plans import Plan
 from ..core.results import ActionResult, VerificationResult
 from ..core.transactions import Transaction, TransactionState
 from ..core.validator import ActionValidator
 from ..providers.llm import AnthropicProvider, LLMProvider, MockLLMProvider
-from ..tasks.task import Task, TaskType
+from ..tasks import TaskClassifier
+from ..tasks.task import Task
 from ..tasks.validator import TaskValidator
 from .context import AgentContext
 from .decisions import AgentDecision, DecisionType
@@ -30,6 +33,7 @@ from .repair import RepairEngine
 from .state import AgentState
 from .tools import ToolRegistry, tool_call_to_action
 from .verifier import AgentVerifier
+from .mode_policy import action_allowed, normalize_mode
 
 
 class AgentController:
@@ -45,6 +49,8 @@ class AgentController:
         repair_engine: Optional[RepairEngine] = None,
         max_iterations: int = 20,
         max_retries: int = 3,
+        permission_policy: Optional[PermissionPolicy] = None,
+        approval_resolver: Optional[Callable[[PermissionRequest], PermissionDecision]] = None,
     ):
         if backend is None:
             pcb_be = PcbnewBackend()
@@ -59,6 +65,9 @@ class AgentController:
         self.repair_engine = repair_engine or RepairEngine(max_retries=max_retries)
         self.tool_registry = ToolRegistry(self.backend)
         self.task_validator = TaskValidator()
+        self.task_classifier = TaskClassifier()
+        self.permission_policy = permission_policy or PermissionPolicy()
+        self.approval_resolver = approval_resolver
         self.max_iterations = max_iterations
         self.max_retries = max_retries
 
@@ -69,8 +78,10 @@ class AgentController:
         task: Optional[Task] = None,
         on_step: Optional[Callable[[str, Any], None]] = None,
         auto_save: bool = False,
+        mode: AgentMode | str = AgentMode.BUILD,
     ) -> Dict[str, Any]:
         """Execute natural language engineering task through the iterative LLM loop."""
+        mode = normalize_mode(mode)
         trace = AgentTrace(user_request=user_request)
         state = AgentState(active_domain=domain, max_iterations=self.max_iterations)
         transaction = Transaction()
@@ -94,7 +105,36 @@ class AgentController:
             current_stage=state.current_stage,
             max_iterations=self.max_iterations,
             available_tools=[t["name"] for t in self.tool_registry.get_available_tools(domain)],
+            user_preferences={"mode": mode.value},
+            plan_summary={"stages": stages},
         )
+
+        if mode is AgentMode.PLAN:
+            plan = self.planner.plan_task(
+                task, domain=domain, current_state=self.backend.get_state(domain)
+            )
+            transaction.rollback()
+            trace.record("PLAN_READY", f"Plan contains {len(plan.actions)} actions")
+            final_state = self.backend.get_state(domain)
+            trace.finish(success=True, final_state=final_state)
+            return {
+                "success": True,
+                "status": "planned",
+                "mode": mode.value,
+                "user_question": None,
+                "task_id": task.task_id,
+                "plan_id": task.task_id,
+                "plan": plan.to_dict(),
+                "results": [],
+                "iterations": 0,
+                "completed_actions": [],
+                "failed_actions": [],
+                "observations": [],
+                "final_verification": None,
+                "transaction_state": transaction.state.value,
+                "final_state": final_state,
+                "trace": trace.to_dict(),
+            }
 
         goal_declared_complete = False
         user_question_asked: Optional[str] = None
@@ -151,6 +191,38 @@ class AgentController:
                 # Convert tool call to structured Action IR
                 action = tool_call_to_action(tool_name, arguments, domain=domain)
                 state.current_action = action
+                if not action_allowed(mode, action.action_type):
+                    message = (
+                        f"Action '{action.action_type.value}' is not allowed in "
+                        f"{mode.value} mode."
+                    )
+                    trace.record("MODE_POLICY_BLOCKED", message)
+                    context.last_error = {
+                        "category": "mode_policy",
+                        "error_message": message,
+                        "recoverable": False,
+                    }
+                    state.errors.append(context.last_error)
+                    state.failed_actions.append(action)
+                    state.final_status = "blocked"
+                    break
+                permission = self.permission_policy.decide(action)
+                if permission.decision is PermissionDecision.ASK:
+                    decision = (
+                        self.approval_resolver(permission.request)
+                        if self.approval_resolver and permission.request
+                        else PermissionDecision.ASK
+                    )
+                    permission = self.permission_policy.decide(action, decision)
+                if permission.decision is not PermissionDecision.ALLOW:
+                    state.final_status = (
+                        "waiting_approval"
+                        if permission.decision is PermissionDecision.ASK
+                        else "blocked"
+                    )
+                    state.pending_permission = permission.request
+                    trace.record("APPROVAL_REQUIRED", permission.request.reason if permission.request else "Permission denied")
+                    break
                 action_success = False
 
                 for attempt in range(1, self.max_retries + 1):
@@ -161,22 +233,32 @@ class AgentController:
                         trace.record("VALIDATION_ERROR", f"Precondition failed on '{action.action_type.value}': {err_msg}")
 
                         # Attempt deterministic L1/L2 repair
-                        repaired = self.repair_engine.attempt_repair(
+                        repair_outcome = self.repair_engine.repair(
                             action,
                             result=ActionResult(action_id=action.action_id, success=False, error=val_errors[0]),
                             attempt=attempt,
                         )
-                        if repaired:
-                            trace.record("REPAIR_APPLIED", f"Validation repair applied: {repaired.description}")
-                            action = repaired
+                        if repair_outcome.repaired:
+                            trace.record(
+                                "REPAIR_APPLIED",
+                                f"Validation repair applied: {repair_outcome.reason}",
+                                {"status": repair_outcome.status, "attempt": attempt},
+                            )
+                            action = repair_outcome.action
                             state.repair_attempts += 1
                             continue
                         else:
+                            trace.record(
+                                "REPAIR_STOPPED",
+                                repair_outcome.reason,
+                                {"status": repair_outcome.status, "attempt": attempt},
+                            )
                             # Pass structured error feedback to LLM for Level 3 adaptive reasoning
                             context.last_error = self.repair_engine.synthesize_error_diagnostic(
                                 action,
                                 result=ActionResult(action_id=action.action_id, success=False, error=val_errors[0]),
                             )
+                            context.last_error["diagnostics"] = [error.to_dict() for error in val_errors]
                             state.errors.append(context.last_error)
                             break
 
@@ -188,14 +270,11 @@ class AgentController:
 
                     # (f) VERIFY ACTION INDEPENDENTLY
                     updated_state = self.backend.get_state(domain)
-                    verification = self.verifier.verify_action(action, result, expected={"state": updated_state})
-                    if (
-                        result.success
-                        and not verification.passed
-                        and verification.message.startswith("No schematic text available")
-                    ):
-                        verification.passed = True
-                        verification.message = "Action execution succeeded; schematic text unavailable for connectivity detail."
+                    verification = self.verifier.verify_action(
+                        action,
+                        result,
+                        expected={"state": updated_state, "action_result": result.data},
+                    )
                     state.verification_history.append(verification)
 
                     if verification.passed and result.success:
@@ -226,17 +305,32 @@ class AgentController:
                         context.last_error = None
                         break
                     else:
-                        trace.record("ACTION_FAILED", f"FAIL: {verification.message or result.error}")
+                        trace.record(
+                            "ACTION_FAILED",
+                            f"{verification.outcome.upper()}: {verification.message or result.error}",
+                            {"verification": verification.to_dict()},
+                        )
                         trace.metrics["actions_failed"] += 1
 
                         # Attempt deterministic repair
                         if attempt < self.max_retries:
-                            repaired = self.repair_engine.attempt_repair(action, result, verification, attempt=attempt)
-                            if repaired:
-                                trace.record("REPAIR_ATTEMPT", f"Attempting L1/L2 repair #{attempt}: {repaired.description}")
-                                action = repaired
+                            repair_outcome = self.repair_engine.repair(
+                                action, result, verification, attempt=attempt
+                            )
+                            if repair_outcome.repaired:
+                                trace.record(
+                                    "REPAIR_ATTEMPT",
+                                    f"Attempting L1/L2 repair #{attempt}: {repair_outcome.reason}",
+                                    {"status": repair_outcome.status},
+                                )
+                                action = repair_outcome.action
                                 state.repair_attempts += 1
                                 continue
+                            trace.record(
+                                "REPAIR_STOPPED",
+                                repair_outcome.reason,
+                                {"status": repair_outcome.status, "attempt": attempt},
+                            )
 
                         # Synthesize diagnostic for Level 3 LLM replanning
                         diag = self.repair_engine.synthesize_error_diagnostic(action, result, verification)
@@ -272,6 +366,12 @@ class AgentController:
         else:
             if user_question_asked:
                 state.final_status = "awaiting_user"
+            elif state.final_status in {"blocked", "waiting_approval"}:
+                transaction.rollback()
+                trace.record(
+                    "TRANSACTION_ROLLED_BACK",
+                    "Task stopped before execution by mode or permission policy.",
+                )
             else:
                 transaction.rollback()
                 state.final_status = "failed"
@@ -282,6 +382,7 @@ class AgentController:
         return {
             "success": overall_success,
             "status": state.final_status,
+            "mode": mode.value,
             "user_question": user_question_asked,
             "task_id": task.task_id,
             "plan_id": task.task_id,
@@ -294,45 +395,15 @@ class AgentController:
             "transaction_state": transaction.state.value,
             "final_state": final_state,
             "trace": trace.to_dict(),
+            "approval_request": (
+                state.pending_permission.to_dict()
+                if state.pending_permission else None
+            ),
         }
 
     def _classify_task(self, user_request: str, domain: str = "pcb") -> Task:
         """Convert natural language request into a Task object."""
-        req = user_request.lower()
-        task_type = TaskType.CUSTOM
-        if "build" in req and ("circuit" in req or "schematic" in req or "pcb" in req or "regulator" in req):
-            task_type = TaskType.BUILD_CIRCUIT
-        elif "create" in req and ("schematic" in req or "pcb" in req):
-            task_type = TaskType.CREATE_SCHEMATIC if domain == "schematic" else TaskType.CREATE_PCB
-        elif "route" in req and "board" in req:
-            task_type = TaskType.ROUTE_BOARD
-        elif "drc" in req or "error" in req:
-            task_type = TaskType.FIX_DRC_ERRORS
-
-        requirements: Dict[str, Any] = {"circuit_type": "generic"}
-        if "arduino" in req:
-            requirements["circuit_type"] = "microcontroller"
-            requirements.setdefault("components", []).append({"type": "microcontroller", "reference": "U1"})
-            requirements.setdefault("components", []).append({"type": "led", "reference": "D1"})
-            requirements.setdefault("components", []).append({"type": "resistor", "reference": "R1", "value": "1k"})
-        elif "led" in req:
-            requirements["circuit_type"] = "led"
-            requirements.setdefault("components", []).append({"type": "led", "reference": "D1"})
-            requirements.setdefault("components", []).append({"type": "resistor", "reference": "R1", "value": "330R"})
-        elif "7805" in req or "regulator" in req:
-            requirements["circuit_type"] = "power_supply"
-            requirements.setdefault("components", []).append({"type": "regulator", "reference": "U1", "value": "LM7805"})
-            requirements.setdefault("components", []).append({"type": "capacitor", "reference": "C1", "value": "0.33uF"})
-            requirements.setdefault("components", []).append({"type": "capacitor", "reference": "C2", "value": "0.1uF"})
-
-        return Task(
-            task_id=f"task-{int(time.time() * 1000)}",
-            task_type=task_type,
-            domain=domain,
-            description=user_request.strip(),
-            requirements=requirements,
-            constraints={"domain": domain},
-        )
+        return self.task_classifier.classify(user_request, domain=domain)
 
     def _summarize_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Summarize KiCad state into compact form for LLM context."""

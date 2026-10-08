@@ -262,7 +262,7 @@ class AnthropicProvider(LLMProvider):
             "or declare completion once all goals and connections are verified."
         )
 
-        context_json = json.dumps(context.format_for_llm(), indent=2)
+        context_json = json.dumps(context.compact_for_llm(), indent=2)
         user_message = f"Current Agent Context:\n```json\n{context_json}\n```\nWhat is your next engineering decision?"
 
         messages = [{"role": "user", "content": user_message}]
@@ -356,3 +356,30 @@ class OpenAICompatibleProvider(LLMProvider):
         model: Optional[str] = None,
     ) -> Any:
         return {"content": "OpenAICompatible response"}
+
+
+def create_configured_provider() -> LLMProvider:
+    """Create the explicitly configured production or offline provider.
+
+    Production runtime boundaries default to Anthropic rather than silently
+    falling back to scripted decisions. Tests and offline demos must opt into
+    ``KICAD_AGENT_PROVIDER=mock`` explicitly.
+    """
+    provider_name = os.environ.get("KICAD_AGENT_PROVIDER", "anthropic").strip().lower()
+    if provider_name == "anthropic":
+        return AnthropicProvider()
+    if provider_name == "mock":
+        return MockLLMProvider()
+    if provider_name in {"openai", "openai-compatible", "ollama"}:
+        return OpenAICompatibleProvider(
+            base_url=os.environ.get(
+                "KICAD_AGENT_OPENAI_BASE_URL",
+                "http://localhost:11434/v1",
+            ),
+            api_key=os.environ.get("KICAD_AGENT_OPENAI_API_KEY", "ollama"),
+            model=os.environ.get("KICAD_AGENT_MODEL", "llama3"),
+        )
+    raise ValueError(
+        "Unknown KICAD_AGENT_PROVIDER value "
+        f"'{provider_name}'. Use anthropic, openai-compatible, or mock."
+    )

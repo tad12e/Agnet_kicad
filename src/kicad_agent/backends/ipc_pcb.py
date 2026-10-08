@@ -137,11 +137,30 @@ class IPCPCBBackend(KiCadBackend):
         except Exception:
             return False
 
+    def connection_status(self) -> Dict[str, Any]:
+        try:
+            status = dict(self.client.connection_status())
+        except Exception as e:
+            status = {
+                "connected": False,
+                "socket_path": getattr(self.client, "socket_path", None),
+                "socket_present": False,
+                "transport_available": False,
+                "error": str(e),
+            }
+        status.update({
+            "backend": self.name,
+            "available": bool(status.get("connected", False)),
+            "fallback": self.fallback.name if self.fallback is not None else None,
+        })
+        return status
+
     def connect(self) -> None:
         self.client.connect()
 
     def disconnect(self) -> None:
         self.client.close()
+        self._doc_proto = None
 
     # ------------------------------------------------------------------
     # Documents: IPC works on the LIVE open board, never on files.
@@ -335,7 +354,7 @@ class IPCPCBBackend(KiCadBackend):
         )
 
     def _execute_fallback(self, action: Action, t0: float, ipc_error: AgentError) -> ActionResult:
-        """Delegate to the fallback backend, marking the result honestly."""
+        """Delegate explicitly to fallback and retain both outcomes."""
         assert self.fallback is not None
         try:
             result = self.fallback.execute(action)
@@ -347,7 +366,18 @@ class IPCPCBBackend(KiCadBackend):
                     category=ErrorCategory.IPC_ERROR,
                     message=f"IPC failed ({ipc_error.message}) and fallback "
                     f"{self.fallback.name} raised: {e}",
+                    context={
+                        "ipc_error": ipc_error.to_dict(),
+                        "fallback_backend": self.fallback.name,
+                        "fallback_exception": str(e),
+                    },
                 ),
+                data={
+                    "fallback_used": True,
+                    "ipc_error": ipc_error.message,
+                    "fallback_success": False,
+                    "fallback_error": str(e),
+                },
                 execution_time_ms=(time.time() - t0) * 1000,
                 backend_used=f"ipc-pcb->{self.fallback.name}",
             )
@@ -355,6 +385,9 @@ class IPCPCBBackend(KiCadBackend):
             result.data = {"result": result.data}
         result.data["fallback_used"] = True
         result.data["ipc_error"] = ipc_error.message
+        result.data["fallback_success"] = result.success
+        if result.error is not None:
+            result.data["fallback_error"] = result.error.to_dict()
         result.backend_used = f"ipc-pcb->{self.fallback.name}"
         return result
 
@@ -367,11 +400,16 @@ class IPCPCBBackend(KiCadBackend):
         try:
             return self._execute_live(action, t0)
         except Exception as e:
-            err = e if isinstance(e, AgentError) else AgentError(
-                category=ErrorCategory.IPC_ERROR,
-                message=str(e),
-                operation=action.action_type.value,
-            )
+            if isinstance(e, AgentError):
+                err = e
+                err.context.setdefault("connection", self.connection_status())
+            else:
+                err = AgentError(
+                    category=ErrorCategory.IPC_ERROR,
+                    message=str(e),
+                    operation=action.action_type.value,
+                    context={"connection": self.connection_status()},
+                )
             if self._should_failover(action, err):
                 return self._execute_fallback(action, t0, err)
             return ActionResult(
@@ -391,6 +429,8 @@ class IPCPCBBackend(KiCadBackend):
                 category=ErrorCategory.INVALID_ACTION,
                 message=f"IPCPCBBackend is PCB-only; action domain is "
                 f"{action.domain.value}. Schematic actions belong to IPCBackend.",
+                operation=action.action_type.value,
+                recoverable=False,
             )
 
         def _ok(data: Dict[str, Any]) -> ActionResult:
