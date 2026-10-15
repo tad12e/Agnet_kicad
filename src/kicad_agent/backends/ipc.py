@@ -232,6 +232,33 @@ class IPCBackend(KiCadBackend):
             "Open a project with that editor frame and retry.",
         )
 
+    def list_open_documents(self) -> list[Dict[str, Any]]:
+        """Return live KiCad document descriptors from GetOpenDocuments."""
+        _, _, GetOpenDocuments, GetOpenDocumentsResponse = get_editor_command_protos()
+        response = self.client.send(
+            GetOpenDocuments(),
+            GetOpenDocumentsResponse,
+        )
+        documents = []
+        for document in response.documents:
+            documents.append({
+                "type": int(getattr(document, "type", 0)),
+                "type_name": str(getattr(document, "type", "")),
+                "filename": str(
+                    getattr(document, "board_filename", "")
+                    or getattr(document, "schematic_filename", "")
+                    or
+                    getattr(document, "filename", "")
+                    or getattr(document, "file_name", "")
+                    or getattr(document, "path", "")
+                ),
+                "project": str(
+                    getattr(document, "project", "")
+                    or getattr(document, "project_path", "")
+                ),
+            })
+        return documents
+
     def begin_commit(self, doc):
         """Open a KiCad edit commit; returns the commit id proto (Part 4).
 

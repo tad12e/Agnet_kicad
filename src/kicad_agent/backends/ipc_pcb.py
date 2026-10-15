@@ -209,6 +209,10 @@ class IPCPCBBackend(KiCadBackend):
         self._doc_proto = doc
         return doc
 
+    def list_open_documents(self) -> list[Dict[str, Any]]:
+        """Return live KiCad document descriptors from GetOpenDocuments."""
+        return self._reader().list_open_documents()
+
     def _reader(self) -> PCBSnapshotReader:
         return PCBSnapshotReader(self.client)
 

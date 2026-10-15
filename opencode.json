@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "kicad": {
+        "type": "local",
+        "command": [
+          "C:\\Users\\hp\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+          "-m",
+          "kicad_agent.mcp.server",
+          "--backend",
+          "ipc"
+        ],
+        "cwd": "C:\\Users\\hp\\orca\\workspaces\\Kicad\\scad",
+        "environment": {
+          "PYTHONPATH": "C:\\Users\\hp\\orca\\workspaces\\Kicad\\scad\\src",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "codemode": false
+      }
+    }
+  }
+}

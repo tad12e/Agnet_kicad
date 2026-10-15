@@ -93,6 +93,33 @@ class PCBSnapshotReader:
             "project_path": getattr(proj, "path", "") if proj else "",
         }
 
+    def list_open_documents(self) -> List[Dict[str, Any]]:
+        """Return all live documents reported by KiCad."""
+        _, _, GetOpenDocuments, GetOpenDocumentsResponse = get_editor_command_protos()
+        response = self.client.send(GetOpenDocuments(), GetOpenDocumentsResponse)
+        result = []
+        for document in response.documents:
+            project = getattr(document, "project", None)
+            result.append({
+                "type": int(getattr(document, "type", 0)),
+                "type_name": str(getattr(document, "type", "")),
+                "filename": str(
+                    getattr(document, "board_filename", "")
+                    or getattr(document, "filename", "")
+                    or getattr(document, "file_name", "")
+                    or getattr(document, "path", "")
+                ),
+                "project": str(
+                    getattr(document, "project_path", "")
+                    or (getattr(project, "path", "") if project else "")
+                ),
+                "project_name": str(
+                    getattr(document, "project_name", "")
+                    or (getattr(project, "name", "") if project else "")
+                ),
+            })
+        return result
+
     def get_items(self, item_types: Optional[List[int]] = None) -> List[Any]:
         """GetItems for the given PCB item types (default: all PCB_ITEM_TYPES).
 

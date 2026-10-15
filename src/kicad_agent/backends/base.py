@@ -57,6 +57,12 @@ class KiCadBackend(abc.ABC):
         """Save schematic state to disk."""
         pass
 
+    def list_open_documents(self) -> list[Dict[str, Any]]:
+        """Return documents discovered from a live editor, when supported."""
+        raise NotImplementedError(
+            f"Backend '{self.name}' does not support live document discovery."
+        )
+
     @abc.abstractmethod
     def get_state(self, domain: str = "pcb") -> Dict[str, Any]:
         """Query current state (components, nets, connectivity, unrouted count)."""

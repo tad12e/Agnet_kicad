@@ -20,12 +20,12 @@ def _fresh_session():
 
 def test_mcp_tool_schemas_complete():
     tools = all_tool_definitions()
-    assert len(tools) == 42  # 11 session + 1 tier2 + 18 pcb + 12 schematic
+    assert len(tools) == 43  # 12 session + 1 tier2 + 18 pcb + 12 schematic
     assert len(ALL_TOOLS_SCHEMA) == 30
     names = [t["name"] for t in tools]
     for expected in (
         "open_schematic", "open_pcb", "save_schematic", "save_pcb",
-        "session_info", "run_design_task",
+        "session_info", "get_open_documents", "run_design_task",
         "start_llm_task", "llm_session_info", "resolve_llm_approval",
         "cancel_llm_task", "save_llm_session", "load_llm_session",
         "get_schematic_state", "get_symbol_pins", "search_symbols",
@@ -56,6 +56,12 @@ def test_mcp_session_info():
     assert out["live"] is False
     assert out["schematic"] is None
     assert out["pcb"] is None
+
+
+def test_mcp_open_document_discovery_requires_ipc():
+    out = _fresh_session().dispatch("get_open_documents", {})
+    assert out["status"] == "error"
+    assert out["code"] == "IPC_UNAVAILABLE"
 
 
 def test_mcp_no_document_errors():

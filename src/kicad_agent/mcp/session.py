@@ -76,6 +76,11 @@ SESSION_TOOLS_SCHEMA = [
         },
     },
     {
+        "name": "get_open_documents",
+        "description": "Discover documents currently open in the KiCad editor through live IPC. This does not require open_schematic or open_pcb first.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "start_llm_task",
         "description": "Start an iterative LLM-driven KiCad task and return its session, trace, and current status.",
         "input_schema": {
@@ -405,6 +410,44 @@ class MCPSession:
             "pcb": self.pcb_path,
         }
 
+    def get_open_documents(self) -> Dict[str, Any]:
+        """Discover current KiCad documents without selecting a file path."""
+        if not self.live:
+            return {
+                "status": "error",
+                "code": "IPC_UNAVAILABLE",
+                "message": (
+                    "Current-document discovery requires live IPC. "
+                    "The server is running in file-only mode."
+                ),
+            }
+
+        documents = []
+        errors = []
+        for domain, backend in (
+            ("schematic", self.sch_backend),
+            ("pcb", self.pcb_backend),
+        ):
+            try:
+                for document in backend.list_open_documents():
+                    item = dict(document)
+                    item["domain"] = domain
+                    documents.append(item)
+            except Exception as exc:
+                errors.append({"domain": domain, "message": str(exc)})
+
+        if not documents and errors:
+            return {
+                "status": "error",
+                "code": "DOCUMENT_DISCOVERY_FAILED",
+                "message": "KiCad did not return any open documents.",
+                "errors": errors,
+            }
+        result: Dict[str, Any] = {"status": "success", "documents": documents}
+        if errors:
+            result["warnings"] = errors
+        return result
+
     # -- dispatch -------------------------------------------------------
 
     def dispatch(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -426,6 +469,8 @@ class MCPSession:
             return self.save_pcb()
         if tool_name == "session_info":
             return self.session_info()
+        if tool_name == "get_open_documents":
+            return self.get_open_documents()
         if tool_name == "start_llm_task":
             return self.start_llm_task(
                 str(args.get("task", "") or ""),
