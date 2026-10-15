@@ -2,6 +2,8 @@
 
 An autonomous pair-programming and design automation platform for **KiCad PCBNew** and **KiCad Schematic (Eeschema)** with a decoupled domain model, deterministic Action Intermediate Representation (IR), independent verifiers, and multi-tiered execution backends.
 
+> **Roadmap & Audit Tracker:** See [ROADMAP.md](ROADMAP.md) for the verified implementation status, subsystem audit, and prioritized milestone task tracker.
+
 ---
 
 ## 🏛️ Architecture Overview
@@ -196,11 +198,16 @@ The system strictly enforces separation of concerns: **the LLM decides WHAT shou
 
 ### Running the Test Suite
 
-Run the full test suite with KiCad's bundled Python interpreter:
+Run the full test suite with your configured Python environment:
 
 ```powershell
-& "C:\Program Files\KiCad\10.0\bin\python.exe" scripts/run_tests.py
+python scripts/run_tests.py
+# or directly via pytest:
+pytest
 ```
+
+> **Note on KiCad bundled Python:** Running with KiCad's embedded interpreter (`"C:\Program Files\KiCad\10.0\bin\python.exe"`) requires installing workspace dependencies (`pytest`, `mcp`, `pydantic`) into a local `.site-packages` directory or the KiCad site-packages.
+
 
 ### Running with the Agent
 

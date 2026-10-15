@@ -34,10 +34,7 @@ def test_first_kicad_sch_summary():
 
 
 def test_repo_first_schematic_exact():
-    contents = open(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "first.kicad_sch"),
-        encoding="utf-8", errors="ignore",
-    ).read()
+    contents = _fixture("canonical_first.kicad_sch")
     summary = summarize_schematic_text(contents)
     assert len(summary["symbols"]) == 20
     assert len(summary["junctions"]) == 12
