@@ -106,6 +106,7 @@ class KiCadAgent:
         # Step 2: PLAN
         plan = self.planner.plan_request(user_request, domain=domain, current_state=current_state)
         self.state.current_plan = plan
+        self.state.max_iterations = max(50, len(plan.actions) * (self.max_retries + 1))
         trace.record("PLAN_CREATED", f"Plan generated with {len(plan.actions)} actions and {len(plan.goals)} goals")
 
         executed_results = []
@@ -380,16 +381,20 @@ class KiCadAgent:
         approved: bool = False,
     ) -> Dict[str, Any]:
         """Execute one model tool and independently verify mutations."""
-        result = self.tool_registry.execute_guarded_tool(
+        domain = self.state.active_domain or "schematic"
+        from ..core.contracts import PermissionDecision
+        approval = PermissionDecision.ALLOW if approved else None
+        result = self.tool_registry.execute_tool(
             tool_name,
             arguments,
-            permission_policy=permission_policy,
-            approved=approved,
+            domain=domain,
+            approval=approval,
         )
         if result.get("status") != "success":
             return result
 
-        action = self.tool_registry._action_for_tool(tool_name, arguments)
+        from .tools import tool_call_to_action
+        action = tool_call_to_action(tool_name, arguments, domain=domain)
         if action is None:
             return result
 

@@ -41,15 +41,27 @@ class PlacementVerifier(BaseVerifier):
 
         # If we have actual board state in result data or expected context
         actual_state = expected.get("state") if expected else result.data
-        if isinstance(actual_state, dict) and "components" in actual_state:
+        if isinstance(actual_state, dict) and ("components" in actual_state or "symbols" in actual_state):
             components: List[Dict[str, Any]] = actual_state.get("components", [])
+            symbols: List[Dict[str, Any]] = actual_state.get("symbols", [])
             
-            # Find the component on board
+            # Find the component on board or schematic
             found_comp = None
             for c in components:
                 if isinstance(c, dict) and c.get("ref", c.get("reference")) == ref:
                     found_comp = c
                     break
+
+            if symbols and (not found_comp or ("x" not in found_comp and "x_mm" not in found_comp)):
+                for s in symbols:
+                    if isinstance(s, dict) and s.get("ref", s.get("reference")) == ref:
+                        found_comp = {
+                            "ref": ref,
+                            "reference": ref,
+                            "x": s.get("x_mm", s.get("x", 0)),
+                            "y": s.get("y_mm", s.get("y", 0)),
+                        }
+                        break
 
             if not found_comp and ref:
                 return VerificationResult(
@@ -60,8 +72,8 @@ class PlacementVerifier(BaseVerifier):
                 )
 
             if found_comp and expected_x is not None and expected_y is not None:
-                actual_x = float(found_comp.get("x", 0))
-                actual_y = float(found_comp.get("y", 0))
+                actual_x = float(found_comp.get("x", found_comp.get("x_mm", 0)))
+                actual_y = float(found_comp.get("y", found_comp.get("y_mm", 0)))
                 dist = math.sqrt((actual_x - float(expected_x)) ** 2 + (actual_y - float(expected_y)) ** 2)
                 if dist > 0.5:  # Tolerance: 0.5mm
                     return VerificationResult(

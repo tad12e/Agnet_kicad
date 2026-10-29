@@ -37,7 +37,7 @@ class AgentState:
     pcb_state: Optional[PCBState] = None
     schematic_state: Optional[SchematicState] = None
     iteration_count: int = 0
-    max_iterations: int = 5
+    max_iterations: int = 50
     session: AgentSession = field(default_factory=AgentSession)
     current_task: Any = None
     current_stage: str = ""

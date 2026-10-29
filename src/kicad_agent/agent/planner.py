@@ -94,20 +94,43 @@ class Planner:
 
         if task_type == TaskType.BUILD_CIRCUIT:
             circuit_type = str(task.requirements.get("circuit_type", "led")).lower()
-            plan.goals.append(Goal(goal_type=GoalType.SCHEMATIC_CREATION, description=f"Build {circuit_type} circuit"))
+            plan.goals.append(Goal(
+                goal_type=GoalType.SCHEMATIC_CREATION if domain == "schematic" else GoalType.PLACEMENT,
+                description=f"Build {circuit_type} circuit",
+            ))
 
-            act_board = Action(
-                action_type=ActionType.CREATE_BOARD,
-                domain=ActionDomain.PCB if domain == "pcb" else ActionDomain.SCHEMATIC,
-                description="Initialize design workspace",
-            )
-            plan.add_action(act_board)
+            if domain == "pcb":
+                act_board = Action(
+                    action_type=ActionType.CREATE_BOARD,
+                    domain=ActionDomain.PCB,
+                    description="Initialize design workspace",
+                )
+                plan.add_action(act_board)
 
             components = task.requirements.get("components", [])
+            placed_coords = []
             for idx, component in enumerate(components):
                 comp_type = str(component.get("type", "component")).lower()
-                ref = f"{comp_type.upper()[:1]}{idx + 1}"
+                ref = component.get("reference") or f"{comp_type.upper()[:1]}{idx + 1}"
                 value = component.get("value", "")
+
+                lib_id = "Device:R"
+                footprint_id = "Resistor_SMD:R_0402_1005Metric"
+                if comp_type in ("capacitor", "cap") or ref.startswith("C"):
+                    lib_id = "Device:C"
+                    footprint_id = "Capacitor_SMD:C_0402_1005Metric"
+                elif comp_type in ("led", "diode") or ref.startswith("D"):
+                    lib_id = "Device:LED"
+                    footprint_id = "LED_SMD:LED_0805_2012Metric"
+                elif comp_type in ("microcontroller", "mcu", "regulator") or ref.startswith("U"):
+                    lib_id = "Device:R"
+                    footprint_id = "Package_TO_SOT_SMD:SOT-223"
+
+                x_pos = 50.0 + idx * 30.0
+                y_pos = 100.0
+                rot = 90 if (comp_type in ("resistor", "capacitor", "cap") or ref.startswith(("R", "C"))) else 0
+                placed_coords.append((x_pos, y_pos))
+
                 action = Action(
                     action_type=ActionType.ADD_SYMBOL if domain == "schematic" else ActionType.ADD_FOOTPRINT,
                     domain=ActionDomain.SCHEMATIC if domain == "schematic" else ActionDomain.PCB,
@@ -115,21 +138,38 @@ class Planner:
                         "reference": ref,
                         "value": value,
                         "component_type": comp_type,
-                        "x": 10.0 + idx * 20.0,
-                        "y": 10.0 + (idx % 2) * 20.0,
+                        "lib_id": lib_id,
+                        "footprint_id": footprint_id,
+                        "x": x_pos,
+                        "y": y_pos,
+                        "rotation": rot,
                     },
-                    description=f"Place {comp_type} {ref}",
+                    description=f"Place {comp_type} {ref} ({value})",
                 )
                 plan.add_action(action)
 
-            if task.requirements.get("components"):
-                wire_action = Action(
-                    action_type=ActionType.ADD_WIRE,
-                    domain=ActionDomain.SCHEMATIC,
-                    parameters={"net_name": "SIGNAL", "start": (0, 0), "end": (20, 0)},
-                    description="Connect circuit elements",
-                )
-                plan.add_action(wire_action)
+            # Connect consecutive components with wires for schematic domain
+            from ..schematic.pin_geometry import resolve_pin_tips
+            if domain == "schematic" and len(placed_coords) > 1:
+                symbol_actions = [a for a in plan.actions if a.action_type == ActionType.ADD_SYMBOL]
+                for i in range(len(symbol_actions) - 1):
+                    p_prev = symbol_actions[i].parameters
+                    p_next = symbol_actions[i + 1].parameters
+                    tips1 = resolve_pin_tips(p_prev["lib_id"], p_prev["x"], p_prev["y"], p_prev.get("rotation", 0))
+                    tips2 = resolve_pin_tips(p_next["lib_id"], p_next["x"], p_next["y"], p_next.get("rotation", 0))
+                    if tips1 and tips2:
+                        p1_coord = tips1.get("2", list(tips1.values())[-1])
+                        p2_coord = tips2.get("1", list(tips2.values())[0])
+                        wire_action = Action(
+                            action_type=ActionType.ADD_WIRE,
+                            domain=ActionDomain.SCHEMATIC,
+                            parameters={
+                                "start": [round(p1_coord[0], 2), round(p1_coord[1], 2)],
+                                "end": [round(p2_coord[0], 2), round(p2_coord[1], 2)],
+                            },
+                            description=f"Connect {p_prev['reference']} to {p_next['reference']}",
+                        )
+                        plan.add_action(wire_action)
 
             return self._finalize_plan(plan)
 
@@ -200,6 +240,12 @@ class Planner:
                 plan.add_action(act_conn)
 
             return self._finalize_plan(plan)
+
+        # Check if natural language request represents a multi-component circuit build task
+        from ..tasks.classifier import TaskClassifier
+        task = TaskClassifier().classify(user_request, domain=domain)
+        if task.task_type == TaskType.BUILD_CIRCUIT:
+            return self.plan_task(task, domain=domain, current_state=current_state)
 
         # 2. Move Footprint: "move R1 to (30, 20)" or "move R1 to 30,20"
         m_move = re.search(r"move\s+([a-zA-Z]+\d+)\s+(?:to\s+)?\(?([0-9.]+)[,\s]+([0-9.]+)\)?", req_lower)

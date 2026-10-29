@@ -17,8 +17,8 @@ class TaskClassifier:
         lowered = request.lower()
         task_type = TaskType.CUSTOM
 
-        if "build" in lowered and any(
-            word in lowered for word in ("circuit", "schematic", "pcb", "regulator")
+        if any(w in lowered for w in ("build", "create", "design", "make")) and any(
+            word in lowered for word in ("circuit", "schematic", "pcb", "regulator", "supply", "filter", "divider")
         ):
             task_type = TaskType.BUILD_CIRCUIT
         elif "create" in lowered and ("schematic" in lowered or "pcb" in lowered):
@@ -33,25 +33,40 @@ class TaskClassifier:
             task_type = TaskType.FIX_DRC_ERRORS
 
         requirements: Dict[str, Any] = {"circuit_type": "generic"}
-        if "arduino" in lowered:
-            requirements["circuit_type"] = "microcontroller"
-            requirements["components"] = [
-                {"type": "microcontroller", "reference": "U1"},
-                {"type": "led", "reference": "D1"},
-                {"type": "resistor", "reference": "R1", "value": "1k"},
-            ]
-        elif "led" in lowered:
-            requirements["circuit_type"] = "led"
-            requirements["components"] = [
-                {"type": "led", "reference": "D1"},
-                {"type": "resistor", "reference": "R1", "value": "330R"},
-            ]
-        elif "7805" in lowered or "regulator" in lowered:
+        if "7805" in lowered or "regulator" in lowered or "power supply" in lowered:
             requirements["circuit_type"] = "power_supply"
             requirements["components"] = [
                 {"type": "regulator", "reference": "U1", "value": "LM7805"},
                 {"type": "capacitor", "reference": "C1", "value": "0.33uF"},
                 {"type": "capacitor", "reference": "C2", "value": "0.1uF"},
+                {"type": "resistor", "reference": "R1", "value": "1k"},
+                {"type": "led", "reference": "D1", "value": "GREEN"},
+            ]
+        elif "divider" in lowered:
+            requirements["circuit_type"] = "voltage_divider"
+            requirements["components"] = [
+                {"type": "resistor", "reference": "R1", "value": "10k"},
+                {"type": "resistor", "reference": "R2", "value": "4.7k"},
+            ]
+        elif "filter" in lowered:
+            requirements["circuit_type"] = "rc_filter"
+            requirements["components"] = [
+                {"type": "resistor", "reference": "R1", "value": "1k"},
+                {"type": "capacitor", "reference": "C1", "value": "100nF"},
+            ]
+        elif "arduino" in lowered or "mcu" in lowered or "microcontroller" in lowered:
+            requirements["circuit_type"] = "microcontroller"
+            requirements["components"] = [
+                {"type": "microcontroller", "reference": "U1", "value": "ATmega32U4"},
+                {"type": "led", "reference": "D1", "value": "LED"},
+                {"type": "resistor", "reference": "R1", "value": "1k"},
+                {"type": "capacitor", "reference": "C1", "value": "100nF"},
+            ]
+        elif "led" in lowered:
+            requirements["circuit_type"] = "led"
+            requirements["components"] = [
+                {"type": "led", "reference": "D1", "value": "RED"},
+                {"type": "resistor", "reference": "R1", "value": "330R"},
             ]
 
         return Task(

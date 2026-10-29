@@ -251,6 +251,58 @@ class IPCBackend(KiCadBackend):
             "Open a project with that editor frame and retry.",
         )
 
+    def discover_open_schematic_path(self, doc=None) -> Optional[str]:
+        """Attempt to discover the filesystem path of the schematic open in KiCad."""
+        if doc is None:
+            try:
+                doc = self._get_document(DocumentType.DOCTYPE_SCHEMATIC)
+            except Exception:
+                return None
+
+        # 1. Try sheet hierarchy
+        try:
+            sheets = self.get_schematic_hierarchy(doc)
+            if sheets:
+                top_filename = sheets[0].get("filename")
+                if top_filename:
+                    if os.path.isabs(top_filename) and os.path.exists(top_filename):
+                        return os.path.abspath(top_filename)
+                    proj = getattr(doc, "project", None)
+                    proj_path = getattr(proj, "path", "") if proj is not None else ""
+                    if proj_path:
+                        proj_dir = proj_path if os.path.isdir(proj_path) else os.path.dirname(proj_path)
+                        cand = os.path.join(proj_dir, top_filename)
+                        if os.path.exists(cand):
+                            return os.path.abspath(cand)
+                        return os.path.abspath(cand)
+        except Exception:
+            pass
+
+        # 2. Try project path + name
+        proj = getattr(doc, "project", None)
+        if proj is not None:
+            proj_path = getattr(proj, "path", "")
+            proj_name = getattr(proj, "name", "")
+            if proj_path:
+                proj_dir = proj_path if os.path.isdir(proj_path) else os.path.dirname(proj_path)
+                if proj_name:
+                    cand = os.path.join(proj_dir, f"{proj_name}.kicad_sch")
+                    if os.path.exists(cand):
+                        return os.path.abspath(cand)
+                if os.path.isdir(proj_dir):
+                    try:
+                        matches = [
+                            os.path.join(proj_dir, f)
+                            for f in os.listdir(proj_dir)
+                            if f.endswith(".kicad_sch")
+                        ]
+                        if matches:
+                            return os.path.abspath(matches[0])
+                    except OSError:
+                        pass
+
+        return None
+
     def begin_commit(self, doc):
         """Open a KiCad edit commit; returns the commit id proto (Part 4).
 
@@ -640,8 +692,18 @@ class IPCBackend(KiCadBackend):
         }
         if domain != "schematic":
             return state
-        # Core read (required): failure raises, never phantom items.
-        state.update(self.get_schematic_snapshot(doc))
+        if self.fallback is not None and hasattr(self.fallback, "sch_filepath") and not getattr(self.fallback, "sch_filepath", None):
+            discovered = self.discover_open_schematic_path(doc)
+            if discovered:
+                self.fallback.sch_filepath = discovered
+        # Core read: try live IPC, fall back to fallback backend on error.
+        try:
+            state.update(self.get_schematic_snapshot(doc))
+        except AgentError:
+            if self.fallback is not None:
+                state.update(self.fallback.get_state("schematic"))
+            else:
+                raise
         if self.fallback is not None and not state.get("components"):
             fallback_state = self.fallback.get_state("schematic")
             if fallback_state.get("components"):
@@ -668,6 +730,10 @@ class IPCBackend(KiCadBackend):
     def _execute_fallback(self, action: Action, t0: float, ipc_error: AgentError) -> ActionResult:
         """Delegate explicitly to fallback and retain both outcomes."""
         assert self.fallback is not None
+        if hasattr(self.fallback, "sch_filepath") and not getattr(self.fallback, "sch_filepath", None):
+            discovered = self.discover_open_schematic_path()
+            if discovered:
+                self.fallback.sch_filepath = discovered
         if action.action_type == ActionType.ADD_JUNCTION:
             return ActionResult(
                 action_id=action.action_id,
