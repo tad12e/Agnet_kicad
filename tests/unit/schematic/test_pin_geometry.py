@@ -86,8 +86,8 @@ def test_device_r_pin_tips_when_library_present():
     tips = resolve_pin_tips("Device:R", 100.0, 100.0, 0.0)
     if tips is None:
         pytest.skip("KiCad symbol library not installed")
-    assert tips["1"] == pytest.approx((100.0, 103.81))
-    assert tips["2"] == pytest.approx((100.0, 96.19))
+    assert tips["1"] == pytest.approx((100.0, 96.19))
+    assert tips["2"] == pytest.approx((100.0, 103.81))
     rotated = resolve_pin_tips("Device:R", 100.0, 100.0, 90.0)
     assert rotated is not None
     assert rotated["1"] == pytest.approx((96.19, 100.0))

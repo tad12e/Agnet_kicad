@@ -28,6 +28,7 @@ class ActionType(str, enum.Enum):
     GET_SCHEMATIC_STATE = "get_schematic_state"
     GET_BOARD_STATE = "get_board_state"
     GET_SYMBOL_PINS = "get_symbol_pins"
+    SEARCH_SYMBOLS = "search_symbols"
     GET_NETS = "get_nets"
     CREATE_BOARD = "create_board"
     LOAD_DOCUMENT = "load_document"

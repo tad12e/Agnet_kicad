@@ -415,6 +415,10 @@ def tool_call_to_action(tool_name: str, arguments: Dict[str, Any], domain: str =
         return Action(action_type=ActionType.GET_BOARD_STATE, domain=ActionDomain.PCB, parameters=args, description="Inspect board state")
     elif tool_name == "get_schematic_state":
         return Action(action_type=ActionType.GET_SCHEMATIC_STATE, domain=ActionDomain.SCHEMATIC, parameters=args, description="Inspect schematic state")
+    elif tool_name == "search_symbols":
+        return Action(action_type=ActionType.SEARCH_SYMBOLS, domain=ActionDomain.SCHEMATIC, parameters=args, description=f"Search symbols matching {args.get('query', '')}")
+    elif tool_name == "verify_schematic_connectivity":
+        return Action(action_type=ActionType.VERIFY_CONNECTIVITY, domain=ActionDomain.SCHEMATIC, parameters=args, description="Verify schematic connectivity")
     elif tool_name == "get_symbol_pins":
         return Action(action_type=ActionType.GET_SYMBOL_PINS, domain=ActionDomain.SCHEMATIC, parameters=args, description=f"Inspect pins of {args.get('reference', '')}")
     elif tool_name == "get_nets":
@@ -542,7 +546,15 @@ class ToolRegistry:
         elif tool_name == "add_wire":
             obs = f"Wire routed from {arguments.get('start')} to {arguments.get('end')}."
         elif tool_name == "get_symbol_pins":
-            obs = f"Symbol {arguments.get('reference', '')} pins: Pin 1 at (100.0, 80.0), Pin 2 at (100.0, 100.0)"
+            pins_data = res.data.get("pins", {}) if (res and res.data) else {}
+            pins_str = ", ".join(f"Pin {p} at {pos}" for p, pos in pins_data.items())
+            obs = f"Symbol {arguments.get('reference', '')} pins: {pins_str}"
+        elif tool_name == "add_junction":
+            obs = f"Junction added at ({arguments.get('x')}, {arguments.get('y')})."
+        elif tool_name in ("delete_symbol", "remove_symbol"):
+            obs = f"Symbol {arguments.get('reference', '')} removed from schematic."
+        elif tool_name in ("run_erc", "verify_schematic_connectivity"):
+            obs = f"ERC verification complete: {res.data}"
         elif tool_name == "add_footprint":
             obs = f"Footprint {arguments.get('reference', '')} placed at ({arguments.get('x')}, {arguments.get('y')}) mm."
         elif tool_name == "run_drc":

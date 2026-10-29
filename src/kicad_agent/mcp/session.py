@@ -186,13 +186,14 @@ class MCPSession:
         # One shared file backend: holds open-document state for both
         # domains and serves as the fallback for both IPC lanes.
         self.file_backend = SexprBackend()
-        if mode == "ipc" or (mode == "auto" and _ipc_socket_present(socket_path)):
+        if mode in ("ipc", "ipc-fallback") or (mode == "auto" and _ipc_socket_present(socket_path)):
             self.live = True
+            fallback = self.file_backend if mode in ("ipc-fallback", "auto") else None
             self.sch_backend: KiCadBackend = IPCBackend(
-                socket_path=socket_path, fallback=self.file_backend
+                socket_path=socket_path, fallback=fallback
             )
             self.pcb_backend: KiCadBackend = IPCPCBBackend(
-                socket_path=socket_path, fallback=self.file_backend
+                socket_path=socket_path, fallback=fallback
             )
         else:
             self.live = False

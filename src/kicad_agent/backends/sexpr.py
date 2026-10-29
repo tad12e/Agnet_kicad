@@ -380,30 +380,39 @@ def add_symbol_to_schematic(
     has_sym_in_lib = f'(symbol "{full_lib_id}"' in content or f"(symbol {full_lib_id}" in content
 
     sym_pins = ["1", "2"]
+    if lib_name:
+        try:
+            from ..schematic.pin_geometry import resolve_lib_def
+            _, q_pins = resolve_lib_def(lib_name, symbol_name)
+            if q_pins:
+                sym_pins = q_pins
+        except Exception:
+            pass
 
     if not has_sym_in_lib and lib_name:
-        symbols_dir = get_kicad_symbols_dir()
-        lib_file = os.path.join(symbols_dir, f"{lib_name}.kicad_sym")
-        if os.path.exists(lib_file):
-            try:
-                sym_def_str = extract_symbol_definition(lib_file, symbol_name)
-                formatted_def = re.sub(r'^\(symbol\s+"([^"]+)"', f'(symbol "{full_lib_id}"', sym_def_str.strip())
+        try:
+            from ..schematic.pin_geometry import resolve_lib_def, _rename_symbol_tree
+            tree, q_pins = resolve_lib_def(lib_name, symbol_name)
+            if tree:
+                _rename_symbol_tree(tree, symbol_name, full_lib_id)
+                tree[1] = f'"{full_lib_id}"'
+                to_insert = format_sexp(tree)
                 if has_lib_symbols:
                     idx = content.find("(lib_symbols")
                     if idx != -1:
                         insert_pos = idx + len("(lib_symbols")
-                        content = content[:insert_pos] + "\n    " + formatted_def + content[insert_pos:]
+                        content = content[:insert_pos] + "\n    " + to_insert + content[insert_pos:]
                 else:
                     m_paper = re.search(r'\(paper\s+"[^"]+"\)', content)
                     if m_paper:
                         insert_pos = m_paper.end()
                         content = (
                             content[:insert_pos]
-                            + f"\n  (lib_symbols\n    {formatted_def}\n  )"
+                            + f"\n  (lib_symbols\n    {to_insert}\n  )"
                             + content[insert_pos:]
                         )
-            except Exception:
-                pass
+        except Exception:
+            pass
 
     pin_blocks = []
     for p in sym_pins:
@@ -467,6 +476,65 @@ def add_symbol_to_schematic(
         f.write(new_content)
 
     return sym_uuid
+
+
+def add_junction_to_schematic(
+    sch_path: str,
+    pos_x_mm: float,
+    pos_y_mm: float,
+    diameter_mm: float = 0.0,
+) -> str:
+    """Insert a wire junction dot into a KiCad schematic file via S-expression."""
+    junc_uuid = str(uuid.uuid4())
+    junc_sexp = f"""  (junction
+    (at {pos_x_mm} {pos_y_mm})
+    (diameter {diameter_mm})
+    (color 0 0 0 0)
+    (uuid "{junc_uuid}")
+  )"""
+    with open(sch_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    last_paren = content.rfind(")")
+    if last_paren != -1:
+        new_content = content[:last_paren].rstrip() + "\n" + junc_sexp + "\n)\n"
+    else:
+        new_content = content + "\n" + junc_sexp + "\n)\n"
+
+    with open(sch_path, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    return junc_uuid
+
+
+def delete_symbol_from_schematic(sch_path: str, reference: str) -> bool:
+    """Remove a symbol instance by reference designator from a KiCad schematic file."""
+    with open(sch_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    pattern = rf'\(symbol\b[\s\S]*?\(property\s+"Reference"\s+"{re.escape(reference)}"'
+    m = re.search(pattern, content)
+    if not m:
+        return False
+    start = content.rfind("(symbol", 0, m.end())
+    if start == -1:
+        return False
+    depth = 0
+    end = -1
+    for i in range(start, len(content)):
+        if content[i] == '(':
+            depth += 1
+        elif content[i] == ')':
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end != -1:
+        new_content = content[:start].rstrip() + "\n" + content[end:].lstrip()
+        with open(sch_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        return True
+    return False
 
 
 def add_wire_to_schematic(
@@ -753,6 +821,16 @@ class SexprBackend(KiCadBackend):
     def save_schematic(self, filepath: Optional[str] = None) -> bool:
         return True
 
+    def _ensure_sch_filepath(self, default_name: str = "new_schematic.kicad_sch") -> str:
+        """Ensure an active schematic filepath exists; create a new file if none set."""
+        if not self.sch_filepath:
+            self.sch_filepath = os.path.abspath(default_name)
+
+        if not os.path.exists(self.sch_filepath):
+            KiCad10SchematicWriter(self.sch_filepath).save()
+
+        return self.sch_filepath
+
     def create_checkpoint(self, domain: str = "pcb") -> Dict[str, Any]:
         filepath = self.pcb_filepath if domain == "pcb" else self.sch_filepath
         if not filepath or not os.path.exists(filepath):
@@ -816,23 +894,35 @@ class SexprBackend(KiCadBackend):
                 "file": self.pcb_filepath,
                 "unconnected_pads": 0,
             }
-        elif domain == "schematic" and self.sch_filepath and os.path.exists(self.sch_filepath):
-            with open(self.sch_filepath, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
-            from ..schematic.sexpr_summary import summarize_schematic_text
-            summary = summarize_schematic_text(content)
-            sym_refs = re.findall(r'\(property\s+"Reference"\s+"([^"]+)"', content)
-            symbols = [{"ref": r, "reference": r} for r in sym_refs]
-            return {
-                "components": symbols,
-                "symbols": summary["symbols"],
-                "wires": summary["wires"],
-                "junctions": summary["junctions"],
-                "labels": summary["labels"],
-                "component_count": len(symbols),
-                "symbol_count": len(symbols),
-                "file": self.sch_filepath,
-            }
+        elif domain == "schematic":
+            sch_file = self.sch_filepath
+            if sch_file and os.path.exists(sch_file):
+                with open(sch_file, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                from ..schematic.sexpr_summary import summarize_schematic_text
+                summary = summarize_schematic_text(content)
+                symbols_by_ref = {s.get("reference"): s for s in summary.get("symbols", [])}
+                sym_refs = re.findall(r'\(property\s+"Reference"\s+"([^"]+)"', content)
+                symbols = []
+                for r in sym_refs:
+                    sym_info = symbols_by_ref.get(r, {})
+                    symbols.append({
+                        "ref": r,
+                        "reference": r,
+                        "x": sym_info.get("x_mm", sym_info.get("x", 0.0)),
+                        "y": sym_info.get("y_mm", sym_info.get("y", 0.0)),
+                    })
+                return {
+                    "components": symbols,
+                    "symbols": summary["symbols"],
+                    "wires": summary["wires"],
+                    "junctions": summary["junctions"],
+                    "labels": summary["labels"],
+                    "component_count": len(symbols),
+                    "symbol_count": len(symbols),
+                    "file": sch_file,
+                }
+            return {}
         return {}
 
     def execute(self, action: Action) -> ActionResult:
@@ -1030,14 +1120,11 @@ class SexprBackend(KiCadBackend):
                 )
 
             elif action.action_type == ActionType.ADD_SYMBOL:
-                if not self.sch_filepath:
-                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
-                if not os.path.exists(self.sch_filepath):
-                    KiCad10SchematicWriter(self.sch_filepath).save()
+                sch_path = self._ensure_sch_filepath()
                 lib_id = p.get("lib_id", "")
                 lib_name, sym_name = lib_id.split(":", 1) if ":" in lib_id else ("", lib_id)
                 sym_uuid = add_symbol_to_schematic(
-                    sch_path=self.sch_filepath,
+                    sch_path=sch_path,
                     lib_name=lib_name,
                     symbol_name=sym_name,
                     reference=p["reference"],
@@ -1055,12 +1142,9 @@ class SexprBackend(KiCadBackend):
                 )
 
             elif action.action_type == ActionType.ADD_WIRE:
-                if not self.sch_filepath:
-                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
-                if not os.path.exists(self.sch_filepath):
-                    KiCad10SchematicWriter(self.sch_filepath).save()
+                sch_path = self._ensure_sch_filepath()
                 wire_uuid = add_wire_to_schematic(
-                    sch_path=self.sch_filepath,
+                    sch_path=sch_path,
                     start=p["start"],
                     end=p["end"],
                 )
@@ -1082,10 +1166,9 @@ class SexprBackend(KiCadBackend):
                 )
 
             elif action.action_type == ActionType.ADD_LABEL:
-                if not self.sch_filepath:
-                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
+                sch_path = self._ensure_sch_filepath()
                 label_uuid = add_label_to_schematic(
-                    self.sch_filepath, str(p.get("text", "")),
+                    sch_path, str(p.get("text", "")),
                     float(p.get("x", 0)), float(p.get("y", 0)),
                     str(p.get("label_type", "local")), float(p.get("rotation", 0)),
                 )
@@ -1097,14 +1180,160 @@ class SexprBackend(KiCadBackend):
                 )
 
             elif action.action_type == ActionType.ADD_BUS:
-                if not self.sch_filepath:
-                    raise AgentError(category=ErrorCategory.FILE_ERROR, message="No Schematic file set for S-expr execution")
+                sch_path = self._ensure_sch_filepath()
                 bus_uuid = add_bus_to_schematic(
-                    self.sch_filepath, tuple(p["start"]), tuple(p["end"])
+                    sch_path, tuple(p["start"]), tuple(p["end"])
                 )
                 return ActionResult(
                     action_id=action.action_id, success=True,
                     data={"uuid": bus_uuid},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.GET_SYMBOL_PINS:
+                sch_path = self._ensure_sch_filepath()
+                ref = p.get("reference", p.get("ref", ""))
+                with open(sch_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                pattern = rf'\(symbol\b[\s\S]*?\(property\s+"Reference"\s+"{re.escape(ref)}"'
+                m = re.search(pattern, content)
+                if not m:
+                    raise AgentError(category=ErrorCategory.MISSING_OBJECT, message=f"Symbol '{ref}' not found in schematic", target_object=ref)
+                start = content.rfind("(symbol", 0, m.end())
+                depth = 0
+                end = -1
+                for i in range(start, len(content)):
+                    if content[i] == '(':
+                        depth += 1
+                    elif content[i] == ')':
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                block = content[start:end] if end != -1 else content[start:start+1000]
+                m_lib = re.search(r'\(lib_id\s+"([^"]+)"\)', block)
+                m_at = re.search(r'\(at\s+([0-9.-]+)\s+([0-9.-]+)(?:\s+([0-9.-]+))?\)', block)
+                if not m_lib or not m_at:
+                    raise AgentError(category=ErrorCategory.API_ERROR, message=f"Failed to parse placement for symbol '{ref}'")
+                lib_id = m_lib.group(1)
+                x = float(m_at.group(1))
+                y = float(m_at.group(2))
+                rot = float(m_at.group(3)) if m_at.group(3) else 0.0
+
+                from ..schematic.pin_geometry import resolve_pin_tips
+                tips = resolve_pin_tips(lib_id, x, y, rot)
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"reference": ref, "lib_id": lib_id, "x": x, "y": y, "rotation": rot, "pins": tips or {}},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.ADD_JUNCTION:
+                sch_path = self._ensure_sch_filepath()
+                x = float(p.get("x", 0))
+                y = float(p.get("y", 0))
+                junc_uuid = add_junction_to_schematic(sch_path, x, y)
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"uuid": junc_uuid, "x": x, "y": y},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type in (ActionType.DELETE_SYMBOL):
+                sch_path = self._ensure_sch_filepath()
+                ref = p.get("reference", p.get("ref", ""))
+                deleted = delete_symbol_from_schematic(sch_path, ref)
+                if not deleted:
+                    raise AgentError(category=ErrorCategory.MISSING_OBJECT, message=f"Symbol '{ref}' not found in schematic", target_object=ref)
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"reference": ref, "deleted": True},
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.RUN_ERC:
+                sch_path = self._ensure_sch_filepath()
+                kicad_cli = r"C:\Program Files\KiCad\10.0\bin\kicad-cli.exe"
+                if os.path.exists(kicad_cli):
+                    import subprocess, tempfile, json
+                    fd, rpt_path = tempfile.mkstemp(suffix=".json")
+                    os.close(fd)
+                    try:
+                        cmd = [kicad_cli, "sch", "erc", "--format", "json", "--output", rpt_path, sch_path]
+                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+                        with open(rpt_path, "r", encoding="utf-8") as f:
+                            rpt = json.load(f)
+                        violations = rpt.get("sheets", [{}])[0].get("violations", []) if rpt.get("sheets") else []
+                        return ActionResult(
+                            action_id=action.action_id,
+                            success=True,
+                            data={"violations_count": len(violations), "violations": violations},
+                            execution_time_ms=(time.time() - t0) * 1000,
+                            backend_used=self.name,
+                        )
+                    finally:
+                        if os.path.exists(rpt_path):
+                            try:
+                                os.unlink(rpt_path)
+                            except OSError:
+                                pass
+                else:
+                    from ..schematic.pin_geometry import endpoint_report
+                    with open(sch_path, "r", encoding="utf-8") as f:
+                        rpt = endpoint_report(f.read())
+                    return ActionResult(
+                        action_id=action.action_id,
+                        success=True,
+                        data=rpt,
+                        execution_time_ms=(time.time() - t0) * 1000,
+                        backend_used=self.name,
+                    )
+
+            elif action.action_type in (ActionType.CHECK_CONNECTIVITY, ActionType.VERIFY_CONNECTIVITY):
+                sch_path = self._ensure_sch_filepath()
+                from ..schematic.pin_geometry import endpoint_report
+                with open(sch_path, "r", encoding="utf-8") as f:
+                    rpt = endpoint_report(f.read())
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data=rpt,
+                    execution_time_ms=(time.time() - t0) * 1000,
+                    backend_used=self.name,
+                )
+
+            elif action.action_type == ActionType.SEARCH_SYMBOLS:
+                query = p.get("query", "").lower()
+                symbols_dir = get_kicad_symbols_dir()
+                results = []
+                if os.path.exists(symbols_dir):
+                    for fname in os.listdir(symbols_dir):
+                        if fname.endswith(".kicad_sym"):
+                            lib_name = fname[:-10]
+                            try:
+                                with open(os.path.join(symbols_dir, fname), "r", encoding="utf-8", errors="ignore") as lf:
+                                    for line in lf:
+                                        if "(symbol " in line:
+                                            m_sym = re.search(r'\(symbol\s+"([^"]+)"', line)
+                                            if m_sym and query in m_sym.group(1).lower():
+                                                results.append(f"{lib_name}:{m_sym.group(1)}")
+                                                if len(results) >= 20:
+                                                    break
+                            except Exception:
+                                pass
+                        if len(results) >= 20:
+                            break
+                return ActionResult(
+                    action_id=action.action_id,
+                    success=True,
+                    data={"matches": results, "count": len(results)},
                     execution_time_ms=(time.time() - t0) * 1000,
                     backend_used=self.name,
                 )

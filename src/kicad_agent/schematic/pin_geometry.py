@@ -6,8 +6,9 @@ against those tips. Works on raw `.kicad_sch` text, so file edits and
 live `SaveDocumentToString` output share one code path.
 
 Verified pin rule (KiCad 10.0 libs): a lib pin's `(at X Y)` IS the wire
-connection tip in symbol-local coordinates. Instance rotation is
-counter-clockwise, applied before translation.
+connection tip in symbol-local coordinates (Y+ is UP).
+In schematic space, Y+ is DOWN, so schematic_y = y_mm - ry.
+Instance rotation is counter-clockwise, applied before translation.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ _TOL_DEFAULT_MM = 0.02
 # =============================================================================
 
 def rotate_point_ccw(x: float, y: float, angle_deg: float) -> Tuple[float, float]:
-    """Rotate (x, y) counter-clockwise about the origin."""
+    """Rotate (x, y) counter-clockwise about the origin in Cartesian space."""
     rad = math.radians(angle_deg)
     cos_a, sin_a = math.cos(rad), math.sin(rad)
     return (x * cos_a - y * sin_a, x * sin_a + y * cos_a)
@@ -106,8 +107,14 @@ def resolve_lib_def(
                             break
                     break
         _rename_symbol_tree(resolved, src_base, symbol_name)
-        unit_block = _unit_subsymbol(resolved, unit=unit)
-        pins = get_symbol_pins_from_def(unit_block) if unit_block else fallback_pins
+
+        all_pins = []
+        for item in resolved:
+            if isinstance(item, list) and len(item) > 1 and item[0] == "symbol":
+                nm = item[1].strip('"') if isinstance(item[1], str) else ""
+                if nm.endswith(f"_{unit}_1") or nm.endswith(f"_{unit}") or "_0_" in nm or nm.endswith("_0"):
+                    all_pins.extend(get_symbol_pins_from_def(item))
+        pins = sorted(list(set(all_pins))) if all_pins else fallback_pins
         return resolved, pins or fallback_pins
     except Exception:
         return None, fallback_pins
@@ -116,23 +123,28 @@ def resolve_lib_def(
 def unit_pin_positions(
     tree: List[Any], unit: int = 1
 ) -> Dict[str, Tuple[float, float]]:
-    """Pin-number -> (x, y) lib-local tip coordinates for one unit."""
+    """Pin-number -> (x, y) lib-local tip coordinates for one unit plus unit-0 shared pins."""
     from .sexpr_summary import find_child, to_float
 
     tips: Dict[str, Tuple[float, float]] = {}
-    unit_block = _unit_subsymbol(tree, unit=unit)
-    if unit_block is None:
-        return tips
-    for sub in unit_block:
-        if not (isinstance(sub, list) and sub and sub[0] == "pin"):
-            continue
-        at = find_child(sub, "at")
-        num = find_child(sub, "number")
-        if at is None or num is None or len(at) < 3 or len(num) < 2:
-            continue
-        number = num[1].strip('"') if isinstance(num[1], str) else ""
-        if number:
-            tips[number] = (to_float(at[1]), to_float(at[2]))
+    blocks = []
+    for item in tree:
+        if isinstance(item, list) and len(item) > 1 and item[0] == "symbol":
+            nm = item[1].strip('"') if isinstance(item[1], str) else ""
+            if nm.endswith(f"_{unit}_1") or nm.endswith(f"_{unit}") or "_0_" in nm or nm.endswith("_0"):
+                blocks.append(item)
+
+    for block in blocks:
+        for sub in block:
+            if not (isinstance(sub, list) and sub and sub[0] == "pin"):
+                continue
+            at = find_child(sub, "at")
+            num = find_child(sub, "number")
+            if at is None or num is None or len(at) < 3 or len(num) < 2:
+                continue
+            number = num[1].strip('"') if isinstance(num[1], str) else ""
+            if number:
+                tips[number] = (to_float(at[1]), to_float(at[2]))
     return tips
 
 
@@ -155,10 +167,67 @@ def resolve_pin_tips(
     if not local:
         return None
     tips = {}
+    rad = math.radians(rotation_deg)
+    cos_a, sin_a = math.cos(rad), math.sin(rad)
     for number, (lx, ly) in local.items():
-        rx, ry = rotate_point_ccw(lx, ly, rotation_deg)
-        tips[number] = (x_mm + rx, y_mm + ry)
+        # CCW rotation in symbol space
+        rx = lx * cos_a - ly * sin_a
+        ry = lx * sin_a + ly * cos_a
+        # In KiCad schematics, Y+ is down, whereas in symbol defs Y+ is up
+        tips[number] = (round(x_mm + rx, 4), round(y_mm - ry, 4))
     return tips
+
+
+def resolve_symbol_pins_detailed(
+    lib_id: str, x_mm: float, y_mm: float, rotation_deg: float = 0.0, unit: int = 1
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Pin-number -> detailed pin metadata (number, name, type, board-coordinate tips)."""
+    from .sexpr_summary import find_child, to_float
+
+    if ":" in lib_id:
+        lib_name, symbol_name = lib_id.split(":", 1)
+    else:
+        lib_name, symbol_name = "", lib_id
+    tree, _pins = resolve_lib_def(lib_name, symbol_name, unit=unit)
+    if tree is None:
+        return None
+
+    blocks = []
+    for item in tree:
+        if isinstance(item, list) and len(item) > 1 and item[0] == "symbol":
+            nm = item[1].strip('"') if isinstance(item[1], str) else ""
+            if nm.endswith(f"_{unit}_1") or nm.endswith(f"_{unit}") or "_0_" in nm or nm.endswith("_0"):
+                blocks.append(item)
+
+    rad = math.radians(rotation_deg)
+    cos_a, sin_a = math.cos(rad), math.sin(rad)
+    pins: Dict[str, Dict[str, Any]] = {}
+    for block in blocks:
+        for sub in block:
+            if not (isinstance(sub, list) and sub and sub[0] == "pin"):
+                continue
+            at = find_child(sub, "at")
+            num = find_child(sub, "number")
+            name = find_child(sub, "name")
+            pin_type = sub[1] if len(sub) > 1 and isinstance(sub[1], str) else ""
+            if at is None or num is None or len(at) < 3 or len(num) < 2:
+                continue
+            number = num[1].strip('"') if isinstance(num[1], str) else ""
+            pin_name = name[1].strip('"') if name and len(name) > 1 and isinstance(name[1], str) else ""
+            lx = to_float(at[1])
+            ly = to_float(at[2])
+            rx = lx * cos_a - ly * sin_a
+            ry = lx * sin_a + ly * cos_a
+            sx = round(x_mm + rx, 4)
+            sy = round(y_mm - ry, 4)
+            pins[number] = {
+                "number": number,
+                "name": pin_name,
+                "type": pin_type,
+                "x": sx,
+                "y": sy,
+            }
+    return pins
 
 
 # =============================================================================
