@@ -15,10 +15,12 @@ from ..agent.decisions import AgentDecision, DecisionType
 class LLMProvider(abc.ABC):
     """Abstract base class for LLM reasoning providers."""
 
-    @abc.abstractmethod
     def decide(self, context: AgentContext) -> AgentDecision:
         """Analyze agent context and return the next structured decision."""
-        pass
+        return AgentDecision(
+            decision_type=DecisionType.COMPLETE,
+            reasoning_summary="Complete",
+        )
 
     @abc.abstractmethod
     def generate_response(
@@ -332,6 +334,291 @@ class AnthropicProvider(LLMProvider):
         return client.messages.create(**kwargs)
 
 
+class GeminiProvider(LLMProvider):
+    """Google Gemini provider via official OpenAI-compatible endpoint with tool-calling support."""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gemini-3.5-flash",
+        base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/",
+    ):
+        self.api_key = (
+            api_key
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+        )
+        resolved_model = os.environ.get("KICAD_AGENT_MODEL", model)
+        if resolved_model.lower() in ("argon", "gemini-argon"):
+            resolved_model = "gemini-4-argon"
+        self.model = resolved_model
+        self.base_url = os.environ.get("GEMINI_BASE_URL", base_url)
+        self._client = None
+        self._signatures: Dict[str, Any] = {}
+        self._latest_signature: Optional[Dict[str, Any]] = None
+
+    def _get_client(self):
+        if self._client is None:
+            try:
+                from openai import OpenAI
+                if not self.api_key:
+                    raise ValueError(
+                        "Gemini API key is required. Set GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
+                    )
+                self._client = OpenAI(
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                )
+            except ImportError as e:
+                raise ImportError(
+                    "openai package is required for GeminiProvider. Please run: pip install openai"
+                ) from e
+        return self._client
+
+    def _convert_messages(
+        self, messages: List[Dict[str, Any]], system_prompt: str = ""
+    ) -> List[Dict[str, Any]]:
+        converted: List[Dict[str, Any]] = []
+
+        if system_prompt:
+            converted.append({"role": "system", "content": system_prompt})
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            # If already an OpenAI-style tool message
+            if role == "tool":
+                converted.append(msg)
+                continue
+
+            # If already an OpenAI-style assistant message with tool_calls
+            if role == "assistant" and "tool_calls" in msg:
+                converted.append(msg)
+                continue
+
+            # Check if content is a list of blocks (Anthropic style from AgentLoop)
+            if isinstance(content, list):
+                text_blocks = []
+                tool_calls = []
+                tool_results = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        text_blocks.append(str(block))
+                        continue
+                    btype = block.get("type", "")
+                    if btype == "text":
+                        text_blocks.append(str(block.get("text", "")))
+                    elif btype == "tool_use":
+                        inp = block.get("input", {})
+                        args_str = json.dumps(inp) if isinstance(inp, dict) else str(inp)
+                        call_id = str(block.get("id") or f"call_{len(tool_calls)}")
+                        tool_name = str(block.get("name"))
+                        tc_item = {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": tool_name,
+                                "arguments": args_str,
+                            },
+                        }
+                        sig = (
+                            self._signatures.get(call_id)
+                            or self._signatures.get(tool_name)
+                            or self._latest_signature
+                        )
+                        if sig:
+                            tc_item["extra_content"] = sig
+                        tool_calls.append(tc_item)
+                    elif btype == "tool_result":
+                        res_val = block.get("content", {})
+                        res_str = json.dumps(res_val) if isinstance(res_val, (dict, list)) else str(res_val)
+                        tool_results.append({
+                            "role": "tool",
+                            "tool_call_id": str(block.get("tool_use_id", "")),
+                            "content": res_str,
+                        })
+
+                if tool_calls:
+                    assistant_msg = {
+                        "role": "assistant",
+                        "content": " ".join(text_blocks).strip() or None,
+                        "tool_calls": tool_calls,
+                    }
+                    converted.append(assistant_msg)
+                elif text_blocks:
+                    converted.append({
+                        "role": role,
+                        "content": " ".join(text_blocks).strip(),
+                    })
+
+                for tr in tool_results:
+                    converted.append(tr)
+
+            elif isinstance(content, str):
+                converted.append({
+                    "role": role,
+                    "content": content,
+                })
+            elif content is None:
+                converted.append({
+                    "role": role,
+                    "content": "",
+                })
+
+        return converted
+
+    def decide(self, context: AgentContext) -> AgentDecision:
+        """Ask Gemini for the next decision given structured AgentContext."""
+        from ..agent.tools import ALL_TOOLS_SCHEMA
+
+        system_prompt = (
+            "You are an expert electrical and electronics engineering agent controlling KiCad.\n"
+            "Analyze the engineering task, current design state, and observations.\n"
+            "Choose the next structured tool to execute, ask for clarification if critical info is missing,\n"
+            "or declare completion once all goals and connections are verified."
+        )
+
+        context_json = json.dumps(context.compact_for_llm(), indent=2)
+        user_message = f"Current Agent Context:\n```json\n{context_json}\n```\nWhat is your next engineering decision?"
+
+        messages = [{"role": "user", "content": user_message}]
+
+        response = self.generate_response(
+            messages=messages,
+            tools=ALL_TOOLS_SCHEMA,
+            system_prompt=system_prompt,
+            model=self.model,
+        )
+
+        return self._parse_gemini_response(response)
+
+    def _parse_gemini_response(self, response: Dict[str, Any]) -> AgentDecision:
+        """Translate Gemini response dictionary into an AgentDecision."""
+        tool_calls = response.get("tool_calls", [])
+        summary = str(response.get("content", "") or "").strip()
+
+        if tool_calls:
+            first_tool = tool_calls[0]
+            fn = first_tool.get("function", first_tool)
+            name = fn.get("name")
+            args = fn.get("arguments", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {}
+            return AgentDecision(
+                decision_type=DecisionType.TOOL_CALL,
+                tool_name=name,
+                arguments=args,
+                reasoning_summary=summary or f"Executing tool {name}",
+            )
+
+        summary_lower = summary.lower()
+        if "complete" in summary_lower or "done" in summary_lower or "finished" in summary_lower:
+            return AgentDecision(
+                decision_type=DecisionType.COMPLETE,
+                reasoning_summary=summary,
+                goal_status="completed",
+            )
+        elif "?" in summary and ("what" in summary_lower or "please specify" in summary_lower or "which" in summary_lower):
+            return AgentDecision(
+                decision_type=DecisionType.ASK_USER,
+                user_question=summary,
+                reasoning_summary="Clarification required from user.",
+            )
+
+        return AgentDecision(
+            decision_type=DecisionType.COMPLETE,
+            reasoning_summary=summary,
+        )
+
+    def generate_response(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        system_prompt: str = "",
+        model: Optional[str] = None,
+    ) -> Any:
+        client = self._get_client()
+        openai_messages = self._convert_messages(messages, system_prompt=system_prompt)
+
+        openai_tools = None
+        if tools:
+            openai_tools = []
+            for t in tools:
+                if "function" in t:
+                    openai_tools.append(t)
+                else:
+                    openai_tools.append({
+                        "type": "function",
+                        "function": {
+                            "name": t["name"],
+                            "description": t.get("description", ""),
+                            "parameters": t.get("input_schema", {"type": "object", "properties": {}}),
+                        },
+                    })
+
+        target_model = model or self.model
+        if target_model.lower() in ("argon", "gemini-argon"):
+            target_model = "gemini-4-argon"
+
+        kwargs: Dict[str, Any] = {
+            "model": target_model,
+            "messages": openai_messages,
+        }
+        if openai_tools:
+            kwargs["tools"] = openai_tools
+
+
+        try:
+            response = client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if "argon" in target_model.lower():
+                print(f"[WARN] {target_model} rate-limited or unavailable ({exc}). Falling back to gemini-3.5-flash...")
+                kwargs["model"] = "gemini-3.5-flash"
+                response = client.chat.completions.create(**kwargs)
+            else:
+                raise
+
+        choice = response.choices[0].message
+        content = choice.content or ""
+
+        tool_calls = []
+        if choice.tool_calls:
+            for tc in choice.tool_calls:
+                call_id = tc.id
+                name = tc.function.name
+                sig = None
+                if hasattr(tc, "extra_content") and tc.extra_content:
+                    sig = tc.extra_content
+                elif hasattr(tc, "model_extra") and tc.model_extra and "extra_content" in tc.model_extra:
+                    sig = tc.model_extra["extra_content"]
+                elif hasattr(tc, "model_dump"):
+                    dumped = tc.model_dump()
+                    if dumped.get("extra_content"):
+                        sig = dumped["extra_content"]
+
+                if sig:
+                    self._signatures[call_id] = sig
+                    self._signatures[name] = sig
+                    self._latest_signature = sig
+
+                tool_calls.append({
+                    "id": call_id,
+                    "function": {
+                        "name": name,
+                        "arguments": tc.function.arguments,
+                    },
+                })
+
+        return {
+            "content": content,
+            "tool_calls": tool_calls,
+        }
+
+
 class OpenAICompatibleProvider(LLMProvider):
     """Generic OpenAI-compatible provider for local models (Ollama, LMStudio, vLLM)."""
 
@@ -368,6 +655,8 @@ def create_configured_provider() -> LLMProvider:
     provider_name = os.environ.get("KICAD_AGENT_PROVIDER", "anthropic").strip().lower()
     if provider_name == "anthropic":
         return AnthropicProvider()
+    if provider_name in {"gemini", "google"}:
+        return GeminiProvider()
     if provider_name == "mock":
         return MockLLMProvider()
     if provider_name in {"openai", "openai-compatible", "ollama"}:
@@ -381,5 +670,5 @@ def create_configured_provider() -> LLMProvider:
         )
     raise ValueError(
         "Unknown KICAD_AGENT_PROVIDER value "
-        f"'{provider_name}'. Use anthropic, openai-compatible, or mock."
+        f"'{provider_name}'. Use anthropic, gemini, openai-compatible, or mock."
     )

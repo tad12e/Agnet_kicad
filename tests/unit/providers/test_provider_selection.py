@@ -5,10 +5,12 @@ import pytest
 from kicad_agent.agent.agent import KiCadAgent  # noqa: F401
 from kicad_agent.providers import (
     AnthropicProvider,
+    GeminiProvider,
     MockLLMProvider,
     OpenAICompatibleProvider,
     create_configured_provider,
 )
+from kicad_agent.providers.factory import configured_provider
 
 
 def test_runtime_provider_defaults_to_anthropic(monkeypatch):
@@ -17,6 +19,28 @@ def test_runtime_provider_defaults_to_anthropic(monkeypatch):
     provider = create_configured_provider()
 
     assert isinstance(provider, AnthropicProvider)
+
+
+def test_gemini_provider_can_be_selected(monkeypatch):
+    monkeypatch.setenv("KICAD_AGENT_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-123")
+
+    provider = create_configured_provider()
+
+    assert isinstance(provider, GeminiProvider)
+    assert provider.api_key == "test-key-123"
+    assert "generativelanguage.googleapis.com" in provider.base_url
+
+
+def test_gemini_auto_detected_from_api_key(monkeypatch):
+    monkeypatch.delenv("KICAD_AGENT_PROVIDER", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+
+    provider = configured_provider()
+
+    assert isinstance(provider, GeminiProvider)
+    assert provider.api_key == "test-gemini-key"
 
 
 def test_mock_provider_requires_explicit_opt_in(monkeypatch):

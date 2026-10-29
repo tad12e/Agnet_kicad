@@ -2,6 +2,7 @@
 
 from .llm import (
     AnthropicProvider,
+    GeminiProvider,
     LLMProvider,
     MockLLMProvider,
     OpenAICompatibleProvider,
@@ -10,6 +11,7 @@ from .llm import (
 
 __all__ = [
     "AnthropicProvider",
+    "GeminiProvider",
     "LLMProvider",
     "MockLLMProvider",
     "OpenAICompatibleProvider",
