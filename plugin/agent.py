@@ -1,126 +1,92 @@
-"""KiCad plugin agent loop adapter using kicad_agent."""
+"""KiCad plugin agent loop adapter using kicad_agent core."""
 
-import json
-from kicad_agent.providers.llm import AnthropicProvider
-from kicad_agent.verification.simulation import run_ngspice_simulation as run_simulation
-from .tools import (
-    get_board_state, place_component,
-    add_trace, run_drc,
-)
+import os
+import sys
+from typing import Callable, Optional
 
-TOOLS = [
-    {
-        "name": "get_board_state",
-        "description": "Read the current PCB board state — all components, nets, and unconnected count. ALWAYS call this first before making any changes.",
-        "input_schema": {"type": "object", "properties": {}, "required": []}
-    },
-    {
-        "name": "place_component",
-        "description": "Place a footprint on the PCB board at a specific position.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "ref":            {"type": "string", "description": "Reference designator e.g. R1, C1, U1"},
-                "value":          {"type": "string", "description": "Component value e.g. 10k, 100nF"},
-                "footprint_lib":  {"type": "string", "description": "Library folder e.g. Resistor_SMD.pretty"},
-                "footprint_name": {"type": "string", "description": "Footprint e.g. R_0402, C_0402"},
-                "x":              {"type": "number", "description": "X position in mm"},
-                "y":              {"type": "number", "description": "Y position in mm"}
-            },
-            "required": ["ref", "value", "footprint_lib", "footprint_name", "x", "y"]
-        }
-    },
-    {
-        "name": "add_trace",
-        "description": "Draw a copper trace between two points on the PCB.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "x1": {"type": "number"}, "y1": {"type": "number"},
-                "x2": {"type": "number"}, "y2": {"type": "number"},
-                "width_mm": {"type": "number", "description": "Trace width in mm, default 0.25"}
-            },
-            "required": ["x1", "y1", "x2", "y2"]
-        }
-    },
-    {
-        "name": "run_drc",
-        "description": "Run Design Rule Check. Returns unconnected pads and errors. Call after placing components.",
-        "input_schema": {"type": "object", "properties": {}, "required": []}
-    },
-    {
-        "name": "run_simulation",
-        "description": "Run ngspice SPICE simulation on a netlist file.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "netlist_path": {"type": "string", "description": "Full path to .cir netlist file"},
-                "analysis":     {"type": "string", "description": "SPICE analysis e.g. .tran 1us 1ms"}
-            },
-            "required": ["netlist_path"]
-        }
-    }
-]
+# Ensure src/ is on path
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_src_dir = os.path.join(_repo_root, "src")
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
-SYSTEM_PROMPT = """You are an expert KiCad PCB design agent with deep knowledge of electronics engineering.
-You can place components, route traces, run DRC checks, and simulate circuits using ngspice.
-"""
+from kicad_agent.mcp.session import MCPSession
+from kicad_agent.providers.llm import AnthropicProvider, GeminiProvider
+from .config import load_config
 
-TOOL_MAP = {
-    "get_board_state": lambda args: get_board_state(),
-    "place_component": lambda args: place_component(**args),
-    "add_trace":       lambda args: add_trace(**args),
-    "run_drc":         lambda args: run_drc(),
-    "run_simulation":  lambda args: run_simulation(**args),
-}
 
-def dispatch(tool_name: str, tool_input: dict) -> str:
-    if tool_name not in TOOL_MAP:
-        return f"Unknown tool: {tool_name}"
+def get_active_files() -> tuple[str, str]:
+    """Detect current board and schematic file paths from KiCad pcbnew if available."""
+    pcb_path = ""
+    sch_path = ""
     try:
-        return str(TOOL_MAP[tool_name](tool_input))
-    except Exception as e:
-        return f"Tool error: {e}"
+        import pcbnew
+        board = pcbnew.GetBoard()
+        if board:
+            fname = board.GetFileName()
+            if fname and os.path.exists(fname):
+                pcb_path = os.path.abspath(fname)
+                candidate_sch = os.path.splitext(pcb_path)[0] + ".kicad_sch"
+                if os.path.exists(candidate_sch):
+                    sch_path = candidate_sch
+    except Exception:
+        pass
+    return pcb_path, sch_path
 
-def run_agent(user_message: str, on_tool_call=None, on_response=None, model: str = "claude-3-7-sonnet-20250219"):
-    provider = AnthropicProvider()
-    messages = [{"role": "user", "content": user_message}]
 
-    while True:
-        response = provider.generate_response(
-            messages=messages,
-            tools=TOOLS,
-            system_prompt=SYSTEM_PROMPT,
-            model=model,
-        )
+def create_plugin_session(provider_override=None, sch_path: str = "", pcb_path: str = "") -> MCPSession:
+    cfg = load_config()
+    provider_name = cfg.get("provider", "gemini").lower()
 
-        messages.append({
-            "role": "assistant",
-            "content": response.content
-        })
+    if provider_override:
+        provider = provider_override
+    elif provider_name in ("gemini", "google"):
+        key = cfg.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY", "")
+        provider = GeminiProvider(api_key=key, model=cfg.get("model", "gemini-2.5-flash"))
+    else:
+        key = cfg.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY", "")
+        provider = AnthropicProvider(api_key=key, model=cfg.get("model", "claude-3-7-sonnet-20250219"))
 
-        if response.stop_reason == "end_turn":
-            for block in response.content:
-                if hasattr(block, "text"):
-                    if on_response:
-                        on_response(block.text)
-                    return block.text
-            return ""
+    session = MCPSession(mode="sexpr", provider=provider)
 
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    result = dispatch(block.name, block.input)
-                    if on_tool_call:
-                        on_tool_call(block.name, block.input, result)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result
-                    })
+    detected_pcb, detected_sch = get_active_files()
+    active_sch = sch_path or detected_sch
+    active_pcb = pcb_path or detected_pcb
 
-            messages.append({
-                "role": "user",
-                "content": tool_results
-            })
+    if active_sch and os.path.exists(active_sch):
+        session.open_schematic(active_sch)
+    if active_pcb and os.path.exists(active_pcb):
+        session.open_pcb(active_pcb)
+
+    return session
+
+
+def run_agent(
+    user_message: str,
+    domain: str = "schematic",
+    on_tool_call: Optional[Callable] = None,
+    on_response: Optional[Callable] = None,
+    sch_path: str = "",
+    pcb_path: str = "",
+):
+    """Run an iterative AI agent task from inside the KiCad plugin."""
+    session = create_plugin_session(sch_path=sch_path, pcb_path=pcb_path)
+
+    # If domain requires schematic and none open, create one in cwd
+    if domain == "schematic" and not session.sch_path:
+        default_sch = os.path.abspath("new_schematic.kicad_sch")
+        session.open_schematic(default_sch)
+
+    res = session.start_llm_task(task=user_message, domain=domain, max_steps=15)
+
+    if res.get("status") == "success":
+        # Report summary
+        reply = res.get("result", {}).get("summary", "Task completed.")
+        if on_response:
+            on_response(reply)
+        return reply
+    else:
+        err = res.get("message") or res.get("error") or "Task encountered an error."
+        if on_response:
+            on_response(f"❌ Error: {err}")
+        return err
